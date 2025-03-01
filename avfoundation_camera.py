@@ -12,129 +12,134 @@ import sys
 import subprocess
 import re
 
-def list_usb_devices():
-    """List USB devices to help diagnose connection issues"""
-    try:
-        result = subprocess.run(["system_profiler", "SPUSBDataType"], capture_output=True, text=True)
-        print("\n----- USB Devices Connected -----")
+# def list_usb_devices():
+#     """List USB devices to help diagnose connection issues"""
+#     try:
+#         result = subprocess.run(["system_profiler", "SPUSBDataType"], capture_output=True, text=True)
+#         print("\n----- USB Devices Connected -----")
         
-        # Parse and display USB devices in a more readable format
-        usb_sections = re.split(r'\s{4}[^:\s]+:', result.stdout)
-        for section in usb_sections:
-            if "Vendor ID" in section or "Camera" in section or "Video" in section or "Logitech" in section:
-                # Clean up and display relevant parts
-                lines = [line.strip() for line in section.split('\n') if line.strip()]
-                print('\n'.join(lines[:10]))  # Show first few lines of relevant sections
+#         # Parse and display USB devices in a more readable format
+#         usb_sections = re.split(r'\s{4}[^:\s]+:', result.stdout)
+#         for section in usb_sections:
+#             if "Vendor ID" in section or "Camera" in section or "Video" in section or "Logitech" in section:
+#                 # Clean up and display relevant parts
+#                 lines = [line.strip() for line in section.split('\n') if line.strip()]
+#                 print('\n'.join(lines[:10]))  # Show first few lines of relevant sections
         
-        print("---------------------------------\n")
-    except Exception as e:
-        print(f"Could not list USB devices: {e}")
+#         print("---------------------------------\n")
+#     except Exception as e:
+#         print(f"Could not list USB devices: {e}")
 
 def main():
     # List USB devices to help diagnose any connection issues
-    list_usb_devices()
+    # list_usb_devices()
     
-    print("Initializing camera using macOS AVFoundation...")
-    print("NOTE: Having multiple USB devices can cause bandwidth or power issues.")
-    print("If camera detection fails, try disconnecting other USB devices temporarily.\n")
+    # print("Initializing camera using macOS AVFoundation...")
+    # print("NOTE: Having multiple USB devices can cause bandwidth or power issues.")
+    # print("If camera detection fails, try disconnecting other USB devices temporarily.\n")
     
-    # Use different camera options, prioritizing external camera configurations
-    # This ordering prioritizes configurations that work better with multiple USB devices
-    camera_options = [
-        # First try direct index access with explicit backend
-        (0, cv2.CAP_AVFOUNDATION, "AVFoundation backend, camera 0"),
-        (1, cv2.CAP_AVFOUNDATION, "AVFoundation backend, camera 1"),
+    # # Use different camera options, prioritizing external camera configurations
+    # # This ordering prioritizes configurations that work better with multiple USB devices
+    # camera_options = [
+    #     # First try direct index access with explicit backend
+    #     (0, cv2.CAP_AVFOUNDATION, "AVFoundation backend, camera 0"),
+    #     (1, cv2.CAP_AVFOUNDATION, "AVFoundation backend, camera 1"),
         
-        # Then try string-based camera access
-        ("avfoundation:0", None, "String URL for camera 0"),
-        ("avfoundation:1", None, "String URL for camera 1"),
-        ("avfoundation:0:0", None, "AVFoundation camera 0, audio 0"),
+    #     # Then try string-based camera access
+    #     ("avfoundation:0", None, "String URL for camera 0"),
+    #     ("avfoundation:1", None, "String URL for camera 1"),
+    #     ("avfoundation:0:0", None, "AVFoundation camera 0, audio 0"),
         
-        # Try with lower resolution hint (helps with bandwidth issues)
-        ("avfoundation:0::320x240", None, "Camera 0 with lower resolution"),
-        ("avfoundation:1::320x240", None, "Camera 1 with lower resolution"),
+    #     # Try with lower resolution hint (helps with bandwidth issues)
+    #     ("avfoundation:0::320x240", None, "Camera 0 with lower resolution"),
+    #     ("avfoundation:1::320x240", None, "Camera 1 with lower resolution"),
         
-        # Last resort options
-        (0, cv2.CAP_ANY, "Default backend, camera 0"),
-        (1, cv2.CAP_ANY, "Default backend, camera 1")
-    ]
+    #     # Last resort options
+    #     (0, cv2.CAP_ANY, "Default backend, camera 0"),
+    #     (1, cv2.CAP_ANY, "Default backend, camera 1")
+    # ]
     
-    # Try all camera options
-    cap = None
-    successful_option = None
-    successful_description = None
+    # # Try all camera options
+    # cap = None
+    # successful_option = None
+    # successful_description = None
     
-    for option, backend, description in camera_options:
-        print(f"Trying: {description}")
-        try:
-            if backend is not None:
-                # Use index with specific backend
-                cap = cv2.VideoCapture(option, backend)
-            else:
-                # Use string format
-                cap = cv2.VideoCapture(option)
+    # for option, backend, description in camera_options:
+    #     print(f"Trying: {description}")
+    #     try:
+    #         if backend is not None:
+    #             # Use index with specific backend
+    #             cap = cv2.VideoCapture(option, backend)
+    #         else:
+    #             # Use string format
+    #             cap = cv2.VideoCapture(option)
                 
-            if cap is not None and cap.isOpened():
-                print(f"  ✅ Camera opened with {description}")
+    #         if cap is not None and cap.isOpened():
+    #             print(f"  ✅ Camera opened with {description}")
                 
-                # Try to read a test frame with increasing delay
-                success = False
-                for attempt in range(1, 5):
-                    delay = attempt * 1.0  # Increasing delay for each attempt
-                    print(f"  Waiting {delay}s for camera to initialize (attempt {attempt}/4)...")
-                    time.sleep(delay)
+    #             # Try to read a test frame with increasing delay
+    #             success = False
+    #             for attempt in range(1, 5):
+    #                 delay = attempt * 1.0  # Increasing delay for each attempt
+    #                 print(f"  Waiting {delay}s for camera to initialize (attempt {attempt}/4)...")
+    #                 time.sleep(delay)
                     
-                    ret, frame = cap.read()
-                    if ret and frame is not None:
-                        print(f"  ✅ Success! Frame received: {frame.shape[1]}x{frame.shape[0]}")
-                        successful_option = option
-                        successful_description = description
-                        success = True
-                        break
-                    else:
-                        print(f"  ❌ No frame received after {delay}s wait")
+    #                 ret, frame = cap.read()
+    #                 if ret and frame is not None:
+    #                     print(f"  ✅ Success! Frame received: {frame.shape[1]}x{frame.shape[0]}")
+    #                     successful_option = option
+    #                     successful_description = description
+    #                     success = True
+    #                     break
+    #                 else:
+    #                     print(f"  ❌ No frame received after {delay}s wait")
                 
-                if success:
-                    break
-                else:
-                    print(f"❌ Option '{description}' connected but no frames - trying next option")
-                    cap.release()
-                    cap = None
-            else:
-                print(f"❌ Failed to open camera with option: {description}")
-                if cap is not None:
-                    cap.release()
-                    cap = None
-        except Exception as e:
-            print(f"❌ Error with {description}: {str(e)}")
-            if cap is not None:
-                cap.release()
-                cap = None
+    #             if success:
+    #                 break
+    #             else:
+    #                 print(f"❌ Option '{description}' connected but no frames - trying next option")
+    #                 cap.release()
+    #                 cap = None
+    #         else:
+    #             print(f"❌ Failed to open camera with option: {description}")
+    #             if cap is not None:
+    #                 cap.release()
+    #                 cap = None
+    #     except Exception as e:
+    #         print(f"❌ Error with {description}: {str(e)}")
+    #         if cap is not None:
+    #             cap.release()
+    #             cap = None
     
-    if cap is None or not cap.isOpened():
-        print("\n❌ ERROR: Could not access any camera after trying all options.")
-        print("\nTROUBLESHOOTING FOR MULTIPLE USB DEVICES:")
-        print("1. USB BANDWIDTH ISSUES: Try disconnecting other USB devices")
-        print("2. TRY DIFFERENT USB PORTS: Some ports may have more bandwidth or power")
-        print("3. USE A POWERED USB HUB: This can resolve power-related issues")
-        print("4. DISCONNECT COMPUTER: If another computer is connected via USB, try disconnecting it")
-        return
+    # if cap is None or not cap.isOpened():
+    #     print("\n❌ ERROR: Could not access any camera after trying all options.")
+    #     print("\nTROUBLESHOOTING FOR MULTIPLE USB DEVICES:")
+    #     print("1. USB BANDWIDTH ISSUES: Try disconnecting other USB devices")
+    #     print("2. TRY DIFFERENT USB PORTS: Some ports may have more bandwidth or power")
+    #     print("3. USE A POWERED USB HUB: This can resolve power-related issues")
+    #     print("4. DISCONNECT COMPUTER: If another computer is connected via USB, try disconnecting it")
+    #     return
     
-    print(f"\n✅ Successfully connected to camera using {successful_description}")
+    # print(f"\n✅ Successfully connected to camera using {successful_description}")
+
+    option = 0
+    successful_option = 0
+    backend = cv2.CAP_AVFOUNDATION
+    cap = cv2.VideoCapture(option, backend)
     
-    # Try lower resolution first for better performance with multiple USB devices
-    camera_width = 320
-    camera_height = 240
+    # # Try lower resolution first for better performance with multiple USB devices
+    # camera_width = 320
+    # camera_height = 240
     
-    # Try to set camera properties
-    original_width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-    original_height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-    print(f"Original camera resolution: {original_width}x{original_height}")
+    # # Try to set camera properties
+    # original_width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+    # original_height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+    # print(f"Original camera resolution: {original_width}x{original_height}")
     
-    # Always try to set a lower resolution when multiple USB devices are connected
-    # This helps with bandwidth issues
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, camera_width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_height)
+    # # Always try to set a lower resolution when multiple USB devices are connected
+    # # This helps with bandwidth issues
+    # cap.set(cv2.CAP_PROP_FRAME_WIDTH, camera_width)
+    # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_height)
     
     # Check what resolution we actually got
     actual_width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
