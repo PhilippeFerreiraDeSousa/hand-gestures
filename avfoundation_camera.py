@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Direct AVFoundation Camera Access for macOS
+Direct AVFoundation Camera Access for macOS with MediaPipe Hand Detection
 This approach directly uses AVFoundation via OpenCV for more reliable camera access on macOS
 """
 
@@ -140,23 +140,21 @@ def main():
     # # This helps with bandwidth issues
     # cap.set(cv2.CAP_PROP_FRAME_WIDTH, camera_width)
     # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_height)
-    
+
     # Check what resolution we actually got
     actual_width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
     actual_height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
     print(f"Working with resolution: {actual_width}x{actual_height}")
     
-    # Initialize MediaPipe Pose with lightweight settings to improve performance
-    mp_pose = mp.solutions.pose
+    # Initialize MediaPipe Hands with lightweight settings to improve performance
+    mp_hands = mp.solutions.hands
     mp_drawing = mp.solutions.drawing_utils
-    pose_drawing_spec = mp_drawing.DrawingSpec(thickness=2, circle_radius=2)
+    mp_drawing_styles = mp.solutions.drawing_styles
     
-    # Use lighter model complexity due to potential USB bandwidth limitations
-    pose = mp_pose.Pose(
+    # Initialize the hand detection model
+    hands = mp_hands.Hands(
         static_image_mode=False,
-        model_complexity=0,  # 0=Lite for better performance
-        smooth_landmarks=True,
-        enable_segmentation=False,
+        max_num_hands=2,  # Detect up to 2 hands
         min_detection_confidence=0.5,
         min_tracking_confidence=0.5
     )
@@ -212,23 +210,50 @@ def main():
             fps = 1 / (curr_time - prev_time) if prev_time > 0 else 0
             prev_time = curr_time
             
+            # Flip the image horizontally for a more natural selfie-view display
+            # This is optional but helps with hand movements appearing more intuitive
+            frame = cv2.flip(frame, 1)
+            
             # MediaPipe expects RGB
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             
-            # Process the frame with MediaPipe
-            results = pose.process(rgb_frame)
+            # To improve performance, optionally mark the image as not writeable
+            rgb_frame.flags.writeable = False
             
-            # Draw pose on the frame
+            # Process the frame with MediaPipe Hands
+            results = hands.process(rgb_frame)
+            
+            # Mark the image as writeable again for drawing
+            rgb_frame.flags.writeable = True
+            
+            # Draw hand landmarks on the frame
             output_frame = frame.copy()
             
-            if results.pose_landmarks:
-                mp_drawing.draw_landmarks(
-                    output_frame,
-                    results.pose_landmarks,
-                    mp_pose.POSE_CONNECTIONS,
-                    landmark_drawing_spec=pose_drawing_spec,
-                    connection_drawing_spec=pose_drawing_spec
-                )
+            # Check if hand landmarks are detected
+            if results.multi_hand_landmarks:
+                for hand_landmarks in results.multi_hand_landmarks:
+                    # Draw the hand landmarks and connections
+                    mp_drawing.draw_landmarks(
+                        output_frame, 
+                        hand_landmarks, 
+                        mp_hands.HAND_CONNECTIONS,
+                        mp_drawing_styles.get_default_hand_landmarks_style(),
+                        mp_drawing_styles.get_default_hand_connections_style()
+                    )
+                    
+                    # You can also extract specific landmarks for further processing
+                    # For example, getting the coordinates of the index finger tip
+                    index_finger_tip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
+                    h, w, c = output_frame.shape
+                    x, y = int(index_finger_tip.x * w), int(index_finger_tip.y * h)
+                    
+                    # Draw a circle at the index finger tip
+                    cv2.circle(output_frame, (x, y), 10, (0, 255, 255), -1)
+            
+            # Display hand count
+            hand_count = 0 if results.multi_hand_landmarks is None else len(results.multi_hand_landmarks)
+            cv2.putText(output_frame, f"Hands: {hand_count}", (10, 90),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
             
             # Display FPS and info
             cv2.putText(output_frame, f"FPS: {fps:.1f}", (10, 30),
@@ -237,7 +262,7 @@ def main():
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             
             # Display the frame
-            cv2.imshow('MediaPipe Pose (AVFoundation)', output_frame)
+            cv2.imshow('MediaPipe Hand Detection (AVFoundation)', output_frame)
             
             # Exit on 'q'
             if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -251,7 +276,7 @@ def main():
     print(f"Processed {frame_count} frames")
     cap.release()
     cv2.destroyAllWindows()
-    pose.close()
+    hands.close()
 
 if __name__ == "__main__":
     main() 
