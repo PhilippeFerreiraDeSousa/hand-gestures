@@ -402,7 +402,7 @@ def main():
                         distance_delta = hands_distance - prev_hands_distance
 
                         # Calculate angle delta for rotation
-                        angle_delta = current_angle - prev_hands_angle
+                        angle_delta = prev_hands_angle - current_angle
                         # Normalize angle delta to handle wrap-around (e.g., 179° to -179°)
                         if angle_delta > 180:
                             angle_delta -= 360
