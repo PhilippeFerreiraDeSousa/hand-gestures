@@ -776,8 +776,6 @@ def main():
 
     # Camera frame gesture variables
     l_shape_detected = False
-    right_index_pressed = False
-    right_index_start_y = None
     camera_frame_active = False
     camera_frame_hold_duration = 0
     camera_frame_cooldown = 0
@@ -785,8 +783,7 @@ def main():
 
     # Constants for gesture detection
     camera_frame_cooldown_frames = 15  # Number of frames to wait before allowing another photo
-    camera_frame_required_duration = 5  # Number of frames to hold gesture before taking photo
-    right_index_press_threshold = 20  # Pixels of movement for index press
+    camera_frame_required_duration = 10  # Number of frames to hold gesture before taking photo
     l_shape_min_angle = 70  # Minimum angle for L-shape (degrees)
     l_shape_max_angle = 110  # Maximum angle for L-shape (degrees)
     min_l_shape_size = 50  # Minimum size of L-shape in pixels
@@ -980,7 +977,8 @@ def main():
                 # Reset camera frame gesture states at the start of each frame
                 l_shape_left_detected = False
                 l_shape_right_detected = False
-                current_right_index_y = None
+                left_l_shape_pos = None
+                right_l_shape_pos = None
 
                 # Process each hand
                 for hand_idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
@@ -1034,87 +1032,100 @@ def main():
                     })
 
                     # Process camera frame gesture
-                    is_l_shape, index_y = process_photo_taking_gesture(
+                    is_l_shape = process_photo_taking_gesture(
                         hand_landmarks, frame_w, frame_h
                     )
-                    # if is_l_shape:
-                    #     print(f"L-shape detected at {index_y}")
-                    #     print(f"is_right_hand: {is_right_hand}")
 
-                    # Update hand states
-                    if is_right_hand:
-                        current_right_index_y = index_y
-                        l_shape_right_detected = is_l_shape
-                    else:
-                        l_shape_left_detected = is_l_shape
+                    # Get L-shape position for frame detection
+                    if is_l_shape:
+                        # Get the center point of the L-shape
+                        thumb_base = hand_landmarks.landmark[2]
+                        index_base = hand_landmarks.landmark[5]
 
-                l_shape_detected = l_shape_left_detected and l_shape_right_detected
-                if l_shape_detected:
-                    print("Both hands in L-shape")
-                elif l_shape_left_detected:
-                    print("Left hand in L-shape")
-                elif l_shape_right_detected:
-                    print("Right hand in L-shape")
-                # else:
-                #     print("No L-shape detected")
+                        l_shape_x = (thumb_base.x + index_base.x) * frame_w / 2
+                        l_shape_y = (thumb_base.y + index_base.y) * frame_h / 2
 
-                    # print(f"l_shape_detected: {l_shape_detected}")
-                    # print(f"l_shape_left_detected: {l_shape_left_detected}")
-                    # print(f"l_shape_right_detected: {l_shape_right_detected}")
+                        if is_right_hand:
+                            l_shape_right_detected = True
+                            right_l_shape_pos = (l_shape_x, l_shape_y)
+                        else:
+                            l_shape_left_detected = True
+                            left_l_shape_pos = (l_shape_x, l_shape_y)
 
-                # Process right index finger press when both hands form L-shape
-                if l_shape_detected:
-                    if right_index_start_y is None:
-                        right_index_start_y = current_right_index_y
-                    elif current_right_index_y - right_index_start_y > right_index_press_threshold:
-                        right_index_pressed = True
-                else:
-                    right_index_start_y = None
-                    right_index_pressed = False
+                # Check if both hands form L-shapes and are in opposite corners
+                l_shape_detected = False
+                print(f"l_shape_left_detected: {l_shape_left_detected}")
+                print(f"l_shape_right_detected: {l_shape_right_detected}")
+                print(f"left_l_shape_pos: {left_l_shape_pos}")
+                print(f"right_l_shape_pos: {right_l_shape_pos}")
+                if l_shape_left_detected and l_shape_right_detected and left_l_shape_pos and right_l_shape_pos:
+                    # Calculate if L-shapes form opposite corners
+                    left_x, left_y = left_l_shape_pos
+                    right_x, right_y = right_l_shape_pos
 
-                # print(f"l_shape_detected: {l_shape_detected}")
-                # print(f"right_index_pressed: {right_index_pressed}")
+                    # Check if hands form diagonal corners (one in top-left/bottom-right, other in opposite)
+                    x_diff = abs(right_x - left_x)
+                    y_diff = abs(right_y - left_y)
+
+                    # Minimum distance between hands to form a frame
+                    min_frame_size = frame_w * 0.2  # 20% of frame width
+
+                    if x_diff > min_frame_size and y_diff > min_frame_size:
+                        # Check if hands form opposite corners
+                        if (left_x < right_x and left_y < right_y) or \
+                           (left_x < right_x and left_y > right_y) or \
+                           (left_x > right_x and left_y < right_y) or \
+                           (left_x > right_x and left_y > right_y):
+                            l_shape_detected = True
+
+                            # Draw the frame outline
+                            corners = [(int(left_x), int(left_y)), (int(right_x), int(right_y))]
+                            x_coords = [x for x, y in corners]
+                            y_coords = [y for x, y in corners]
+                            frame_left = min(x_coords)
+                            frame_right = max(x_coords)
+                            frame_top = min(y_coords)
+                            frame_bottom = max(y_coords)
+
+                            # Draw frame rectangle
+                            cv2.rectangle(output_frame,
+                                        (frame_left, frame_top),
+                                        (frame_right, frame_bottom),
+                                        (0, 255, 0), 2)
 
                 # Update camera frame active state
-                print(f"Condition 1: {l_shape_detected}")
-                if l_shape_detected:
-                    print(f"Condition 2: {right_index_pressed} and {camera_frame_cooldown == 0}")
-                    if right_index_pressed and camera_frame_cooldown == 0:
-                        print(f"Condition 3: {camera_frame_hold_duration} >= {camera_frame_required_duration}")
-                        camera_frame_hold_duration += 1
-                        if camera_frame_hold_duration >= camera_frame_required_duration:
-                            print(f"Condition 4: {current_time - last_camera_frame_time}")
-                            # Take photo
-                            current_time = time.time()
-                            if current_time - last_camera_frame_time > 1.0:
-                                print("Taking photo with camera frame gesture!")
+                print(f"l_shape_detected: {l_shape_detected}, camera_frame_cooldown: {camera_frame_cooldown}")
+                if l_shape_detected and camera_frame_cooldown == 0:
+                    camera_frame_hold_duration += 1
+                    print(f"camera_frame_hold_duration: {camera_frame_hold_duration}")
+                    if camera_frame_hold_duration >= camera_frame_required_duration:
+                        # Take photo
+                        current_time = time.time()
+                        if current_time - last_camera_frame_time > 1.0:
+                            print("Taking photo with camera frame gesture!")
 
-                                # Create timestamp for filenames
-                                timestamp = time.strftime('%Y%m%d_%H%M%S')
+                            # Create timestamp for filenames
+                            timestamp = time.strftime('%Y%m%d_%H%M%S')
 
-                                # Save photos
-                                if not os.path.exists('static'):
-                                    os.makedirs('static')
+                            # Save photos
+                            if not os.path.exists('static'):
+                                os.makedirs('static')
 
-                                transformed_filename = f"photo_{timestamp}_transformed.jpg"
-                                cv2.imwrite(os.path.join('static', transformed_filename), output_frame)
+                            transformed_filename = f"photo_{timestamp}_transformed.jpg"
+                            cv2.imwrite(os.path.join('static', transformed_filename), output_frame)
 
-                                original_filename = f"photo_{timestamp}_original.jpg"
-                                cv2.imwrite(os.path.join('static', original_filename), original_frame)
+                            original_filename = f"photo_{timestamp}_original.jpg"
+                            cv2.imwrite(os.path.join('static', original_filename), original_frame)
 
-                                print(f"Photos saved as {transformed_filename} and {original_filename}")
+                            print(f"Photos saved as {transformed_filename} and {original_filename}")
 
-                                # Notify web clients
-                                notify_clients_photo_taken(transformed_filename)
+                            # Notify web clients
+                            notify_clients_photo_taken(transformed_filename)
 
-                                # Reset states
-                                camera_frame_cooldown = camera_frame_cooldown_frames
-                                camera_frame_hold_duration = 0
-                                last_camera_frame_time = current_time
-                    else:
-                        camera_frame_hold_duration = 0
-                else:
-                    camera_frame_hold_duration = 0
+                            # Reset states
+                            camera_frame_cooldown = camera_frame_cooldown_frames
+                            camera_frame_hold_duration = 0
+                            last_camera_frame_time = current_time
 
                 # Update camera frame cooldown
                 if camera_frame_cooldown > 0:
@@ -1125,14 +1136,13 @@ def main():
                     status_text = "Photo taken!"
                     status_color = (0, 255, 255)
                 elif l_shape_detected:
-                    if right_index_pressed:
-                        status_text = "Taking photo..."
-                        status_color = (0, 255, 0)
-                    else:
-                        status_text = "Press shutter"
-                        status_color = (0, 255, 0)
+                    status_text = f"Hold frame... {camera_frame_hold_duration}/{camera_frame_required_duration}"
+                    status_color = (0, 255, 0)
+                elif l_shape_left_detected or l_shape_right_detected:
+                    status_text = "Make frame with both hands"
+                    status_color = (0, 255, 0)
                 else:
-                    status_text = "Make camera frame with both hands"
+                    status_text = "Make L-shapes with both hands"
                     status_color = (200, 200, 200)
 
                 # Display the status text
@@ -1755,53 +1765,52 @@ def minimal_view():
 def process_photo_taking_gesture(hand_landmarks, frame_w, frame_h):
     """
     Process hand landmarks to detect L-shape camera frame gesture.
+    The L-shape is formed with thumb and index finger pointing in opposite directions.
     Returns (is_l_shape, index_y) tuple where:
     - is_l_shape: boolean indicating if hand forms an L-shape
-    - index_y: y-coordinate of index finger tip for press detection
     """
     # Constants for L-shape detection
     min_l_shape_size = 50  # Minimum size of L-shape in pixels
     max_l_shape_size = 200  # Maximum size of L-shape in pixels
-    l_shape_min_angle = 70  # Minimum angle for L-shape (degrees)
-    l_shape_max_angle = 110  # Maximum angle for L-shape (degrees)
+    l_shape_min_angle = 50  # Minimum angle for L-shape (degrees) - close to 180 for opposite directions
+    l_shape_max_angle = 110  # Maximum angle for L-shape (degrees) - allow some flexibility
 
-    # Get relevant landmarks for L-shape detection
-    thumb_tip = hand_landmarks.landmark[4]  # Thumb tip
-    thumb_base = hand_landmarks.landmark[2]  # Thumb IP joint
-    index_tip = hand_landmarks.landmark[8]  # Index finger tip
-    index_base = hand_landmarks.landmark[5]  # Index finger MCP
-
-    # Convert normalized coordinates to pixel values
-    thumb_tip_x = int(thumb_tip.x * frame_w)
-    thumb_tip_y = int(thumb_tip.y * frame_h)
-    thumb_base_x = int(thumb_base.x * frame_w)
-    thumb_base_y = int(thumb_base.y * frame_h)
-    index_tip_x = int(index_tip.x * frame_w)
-    index_tip_y = int(index_tip.y * frame_h)
-    index_base_x = int(index_base.x * frame_w)
-    index_base_y = int(index_base.y * frame_h)
-
-    # Calculate vectors for thumb and index finger
-    thumb_vector = (thumb_tip_x - thumb_base_x, thumb_tip_y - thumb_base_y)
-    index_vector = (index_tip_x - index_base_x, index_tip_y - index_base_y)
+    # Calculate vectors for thumb IP joint to tip and index MCP to tip
+    thumb_vector = finger_vector(hand_landmarks, 2, 4, frame_w, frame_h)
+    index_vector = finger_vector(hand_landmarks, 5, 8, frame_w, frame_h)
 
     # Calculate lengths
     thumb_length = math.sqrt(thumb_vector[0]**2 + thumb_vector[1]**2)
     index_length = math.sqrt(index_vector[0]**2 + index_vector[1]**2)
 
-    # Check if lengths are within acceptable range
-    if not (min_l_shape_size <= thumb_length <= max_l_shape_size and
-            min_l_shape_size <= index_length <= max_l_shape_size):
-        return False, index_tip_y
+    # # Check if lengths are within acceptable range
+    # if not (min_l_shape_size <= thumb_length <= max_l_shape_size and
+    #         min_l_shape_size <= index_length <= max_l_shape_size):
+    #     return False
 
     # Calculate angle between vectors using dot product
     dot_product = thumb_vector[0] * index_vector[0] + thumb_vector[1] * index_vector[1]
     angle = math.degrees(math.acos(dot_product / (thumb_length * index_length)))
+    print(f"angle: {angle}")
 
-    # Check if angle is within L-shape range
+    # For opposite directions, the angle should be close to 180 degrees
+    # If vectors point in opposite directions, their angle will be close to 180°
     is_l_shape = l_shape_min_angle <= angle <= l_shape_max_angle
 
-    return is_l_shape, index_tip_y
+    return is_l_shape
+
+# finger vector base to tip
+def finger_vector(hand_landmarks, base_index, tip_index, frame_w, frame_h):
+    tip = hand_landmarks.landmark[tip_index]
+    base = hand_landmarks.landmark[base_index]
+
+    # Convert normalized coordinates to pixel values
+    tip_x = int(tip.x * frame_w)
+    tip_y = int(tip.y * frame_h)
+    base_x = int(base.x * frame_w)
+    base_y = int(base.y * frame_h)
+
+    return tip_x - base_x, tip_y - base_y
 
 if __name__ == "__main__":
     main()
