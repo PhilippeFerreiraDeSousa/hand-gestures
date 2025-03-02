@@ -98,6 +98,7 @@ def index():
             <button onclick="refreshStream()">Refresh Stream</button>
             <button onclick="toggleFallback()">Try Simple Mode</button>
             <button onclick="testShutterSound()">Test Shutter Sound</button>
+            <button onclick="window.location.href='/view_photos'">View Photos</button>
         </div>
         <div class="fallback" id="fallbackInfo" style="display:none;">
             <p>If the stream isn't working, you can try the <a href="/simple_view">Simple Mode</a> or
@@ -203,6 +204,51 @@ def index():
                             const data = JSON.parse(event.data);
                             if (data.action === "take_photo") {
                                 playShutterSound();
+
+                                // If a filename was provided, show a notification
+                                if (data.filename) {
+                                    // Create or update photo notification
+                                    let photoNotice = document.getElementById('photoNotice');
+                                    if (!photoNotice) {
+                                        photoNotice = document.createElement('div');
+                                        photoNotice.id = 'photoNotice';
+                                        photoNotice.style.position = 'fixed';
+                                        photoNotice.style.bottom = '20px';
+                                        photoNotice.style.right = '20px';
+                                        photoNotice.style.backgroundColor = 'rgba(0,0,0,0.7)';
+                                        photoNotice.style.color = 'white';
+                                        photoNotice.style.padding = '10px';
+                                        photoNotice.style.borderRadius = '5px';
+                                        photoNotice.style.zIndex = '1000';
+                                        photoNotice.style.transition = 'opacity 0.5s';
+                                        document.body.appendChild(photoNotice);
+                                    }
+
+                                    // Get the filename without the timestamp
+                                    const displayName = data.filename;
+
+                                    // Add a link to view the photo
+                                    photoNotice.innerHTML = `
+                                        <div style="display: flex; align-items: center;">
+                                            <span style="margin-right: 10px;">📸</span>
+                                            <div>
+                                                <div>Photo captured!</div>
+                                                <a href="/static/${data.filename}" target="_blank"
+                                                   style="color: #8affff; text-decoration: underline;">
+                                                   View photo
+                                                </a>
+                                            </div>
+                                        </div>
+                                    `;
+
+                                    // Show the notification
+                                    photoNotice.style.opacity = '1';
+
+                                    // Hide after 5 seconds
+                                    setTimeout(() => {
+                                        photoNotice.style.opacity = '0';
+                                    }, 5000);
+                                }
                             }
                         } catch (e) {
                             console.error("Error parsing event data:", e);
@@ -441,6 +487,51 @@ def simple_view():
                             const data = JSON.parse(event.data);
                             if (data.action === "take_photo") {
                                 playShutterSound();
+
+                                // If a filename was provided, show a notification
+                                if (data.filename) {
+                                    // Create or update photo notification
+                                    let photoNotice = document.getElementById('photoNotice');
+                                    if (!photoNotice) {
+                                        photoNotice = document.createElement('div');
+                                        photoNotice.id = 'photoNotice';
+                                        photoNotice.style.position = 'fixed';
+                                        photoNotice.style.bottom = '20px';
+                                        photoNotice.style.right = '20px';
+                                        photoNotice.style.backgroundColor = 'rgba(0,0,0,0.7)';
+                                        photoNotice.style.color = 'white';
+                                        photoNotice.style.padding = '10px';
+                                        photoNotice.style.borderRadius = '5px';
+                                        photoNotice.style.zIndex = '1000';
+                                        photoNotice.style.transition = 'opacity 0.5s';
+                                        document.body.appendChild(photoNotice);
+                                    }
+
+                                    // Get the filename without the timestamp
+                                    const displayName = data.filename;
+
+                                    // Add a link to view the photo
+                                    photoNotice.innerHTML = `
+                                        <div style="display: flex; align-items: center;">
+                                            <span style="margin-right: 10px;">📸</span>
+                                            <div>
+                                                <div>Photo captured!</div>
+                                                <a href="/static/${data.filename}" target="_blank"
+                                                   style="color: #8affff; text-decoration: underline;">
+                                                   View photo
+                                                </a>
+                                            </div>
+                                        </div>
+                                    `;
+
+                                    // Show the notification
+                                    photoNotice.style.opacity = '1';
+
+                                    // Hide after 5 seconds
+                                    setTimeout(() => {
+                                        photoNotice.style.opacity = '0';
+                                    }, 5000);
+                                }
                             }
                         } catch (e) {
                             console.error("Error parsing event data:", e);
@@ -515,6 +606,7 @@ def simple_view():
         <button onclick="refreshImage()">Refresh Now</button>
         <button onclick="window.location.href='/'">Back to Standard Mode</button>
         <button onclick="testShutterSound()">Test Shutter Sound</button>
+        <button onclick="window.location.href='/view_photos'">View Photos</button>
         <div class="info">
             <h3>Hand Gesture Instructions:</h3>
             <p>1. Show both hands with thumb and index finger pinching</p>
@@ -1116,20 +1208,33 @@ def main():
 
                                 # Photo gesture detected!
                                 print(f"Photo gesture detected! Distance velocity: {distance_velocity:.1f}")
-
-                                # Take a photo (save the current frame)
-                                photo_filename = f"photo_{time.strftime('%Y%m%d_%H%M%S')}.jpg"
-                                cv2.imwrite(os.path.join('static', photo_filename), original_frame)
-                                print(f"Photo saved as {photo_filename}")
-
+                                
+                                # Create timestamp for filenames
+                                timestamp = time.strftime('%Y%m%d_%H%M%S')
+                                
                                 # Check if we need to create a static directory
                                 if not os.path.exists('static'):
                                     os.makedirs('static')
                                     print("Created static directory for storing photos and sounds")
-
+                                
+                                # Save the transformed frame (with zoom and rotation)
+                                transformed_filename = f"photo_{timestamp}_transformed.jpg"
+                                cv2.imwrite(os.path.join('static', transformed_filename), output_frame)
+                                
+                                # Also save the original frame for reference
+                                original_filename = f"photo_{timestamp}_original.jpg"
+                                cv2.imwrite(os.path.join('static', original_filename), original_frame)
+                                
+                                print(f"Photos saved as:")
+                                print(f"  - {transformed_filename} (with zoom: {zoom_scale:.2f}x, rotation: {rotation_angle:.1f}°)")
+                                print(f"  - {original_filename} (original frame)")
+                                
+                                # Store the filename for access in web interface
+                                latest_photo = transformed_filename
+                                
                                 # Notify web clients to play sound and show flash
-                                notify_clients_photo_taken()
-
+                                notify_clients_photo_taken(transformed_filename)
+                                
                                 # Start cooldown period to prevent multiple triggers
                                 photo_gesture_cooldown = photo_cooldown_frames
                                 last_photo_time = current_time
@@ -1321,12 +1426,111 @@ def serve_static(filename):
 global_photo_clients = []
 global_photo_clients_lock = threading.Lock()
 
-def notify_clients_photo_taken():
+# Global variable to store the latest photo filename
+latest_photo = None
+
+def notify_clients_photo_taken(photo_filename=None):
     """Send a message to all connected clients that a photo was taken"""
-    event_data = json.dumps({"action": "take_photo", "timestamp": time.time()})
+    event_data = json.dumps({
+        "action": "take_photo", 
+        "timestamp": time.time(),
+        "filename": photo_filename
+    })
     with global_photo_clients_lock:
         for client_queue in global_photo_clients:
             client_queue.append(event_data)
+
+@app.route('/view_photos')
+def view_photos():
+    """Display a gallery of captured photos"""
+    # Get all photo files from the static directory, ordered by modification time (newest first)
+    static_dir = 'static'
+    if not os.path.exists(static_dir):
+        return "No photos available. Take some photos first!"
+
+    photo_files = [f for f in os.listdir(static_dir)
+                  if f.startswith('photo_') and (f.endswith('.jpg') or f.endswith('.png'))]
+
+    # Sort by creation time (newest first)
+    photo_files.sort(key=lambda f: os.path.getmtime(os.path.join(static_dir, f)), reverse=True)
+
+    if not photo_files:
+        return "No photos found. Take some photos first!"
+
+    # Create a simple gallery
+    html = """
+    <html>
+    <head>
+        <title>Captured Photos Gallery</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 20px; text-align: center; background-color: #f0f0f0; }
+            h1 { color: #333; }
+            .gallery { display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; margin-top: 20px; }
+            .photo-item {
+                position: relative;
+                width: 300px;
+                background: white;
+                padding: 10px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                border-radius: 5px;
+                transition: transform 0.2s;
+            }
+            .photo-item:hover { transform: scale(1.02); }
+            .photo-img { width: 100%; height: 200px; object-fit: cover; cursor: pointer; }
+            .photo-info { padding: 10px; text-align: left; font-size: 14px; }
+            .timestamp { color: #666; }
+            .back-link { margin: 20px; display: inline-block; }
+            .label {
+                position: absolute;
+                top: 5px;
+                right: 5px;
+                background-color: rgba(0,0,0,0.6);
+                color: white;
+                padding: 3px 8px;
+                border-radius: 3px;
+                font-size: 12px;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>Captured Photos Gallery</h1>
+        <a href="/" class="back-link">← Back to Camera</a>
+        <div class="gallery">
+    """
+
+    # Add each photo to the gallery
+    for photo_file in photo_files:
+        file_path = os.path.join(static_dir, photo_file)
+        mod_time = os.path.getmtime(file_path)
+        timestamp = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(mod_time))
+
+        # Determine if it's an original or transformed photo
+        label = ""
+        if "_original" in photo_file:
+            label = "Original"
+        elif "_transformed" in photo_file:
+            label = "Transformed"
+
+        html += f"""
+        <div class="photo-item">
+            <div class="label">{label}</div>
+            <a href="/static/{photo_file}" target="_blank">
+                <img class="photo-img" src="/static/{photo_file}" alt="{photo_file}">
+            </a>
+            <div class="photo-info">
+                <div>{photo_file}</div>
+                <div class="timestamp">{timestamp}</div>
+            </div>
+        </div>
+        """
+
+    html += """
+        </div>
+    </body>
+    </html>
+    """
+
+    return html
 
 if __name__ == "__main__":
     main()

@@ -143,3 +143,8 @@ Check input integrity with :
 ```
 ffplay rtmp://10.0.0.215/live/r1NfNH-jkg
 ```
+
+Or
+```
+python avfoundation_camera.py --webcam
+```
