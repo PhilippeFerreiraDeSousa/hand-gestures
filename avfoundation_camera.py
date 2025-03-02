@@ -1721,18 +1721,99 @@ def minimal_view():
                 width: 640px;
                 height: 480px;
                 overflow: hidden;
+                position: relative;
             }
             img {
                 width: 100%;
                 height: 100%;
                 object-fit: cover;
             }
+            .flash {
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background-color: white;
+                opacity: 0;
+                pointer-events: none;
+                transition: opacity 0.1s ease-out;
+            }
         </style>
+        <script>
+            // Set up EventSource for server-sent events
+            function setupEventSource() {
+                if (typeof(EventSource) !== "undefined") {
+                    const evtSource = new EventSource("/photo_events");
+
+                    evtSource.onmessage = function(event) {
+                        if (!event.data || event.data === "{}") return;
+
+                        try {
+                            const data = JSON.parse(event.data);
+                            if (data.action === "take_photo") {
+                                playShutterSound();
+                            }
+                        } catch (e) {
+                            console.error("Error parsing event data:", e);
+                        }
+                    };
+
+                    evtSource.onerror = function() {
+                        evtSource.close();
+                        setTimeout(setupEventSource, 5000);
+                    };
+                }
+            }
+
+            function playShutterSound() {
+                const sound = document.getElementById('shutterSound');
+                sound.currentTime = 0;
+                sound.play().catch(e => {
+                    console.log("Error playing sound:", e);
+                    showFlashEffect();
+                });
+                showFlashEffect();
+            }
+
+            function showFlashEffect() {
+                const flash = document.getElementById('flash');
+                flash.style.opacity = 0.7;
+                setTimeout(() => {
+                    flash.style.opacity = 0;
+                }, 100);
+            }
+
+            // Initialize audio context and load sound
+            function initAudio() {
+                const sound = document.getElementById('shutterSound');
+                sound.load();
+                // Try to play and immediately pause to enable audio
+                sound.volume = 0.01;
+                sound.play().then(() => {
+                    sound.pause();
+                    sound.currentTime = 0;
+                    sound.volume = 1.0;
+                }).catch(e => {
+                    console.log("Auto-enable audio failed:", e);
+                });
+            }
+
+            // Initialize when page loads
+            window.onload = function() {
+                setupEventSource();
+                initAudio();
+            };
+        </script>
     </head>
     <body>
         <div class="video-container">
             <img src="/video_feed" id="stream" alt="Live Stream" />
+            <div id="flash" class="flash"></div>
         </div>
+        <audio id="shutterSound" preload="auto">
+            <source src="/static/camera-shutter.mp3" type="audio/mpeg">
+        </audio>
     </body>
     </html>
     """
