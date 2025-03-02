@@ -9,8 +9,252 @@ import mediapipe as mp
 import time
 import numpy as np
 import math
+import threading
+from flask import Flask, Response
+import socket
+
+# Global variables for sharing frames with the streaming server
+global_output_frame = None
+global_frame_lock = threading.Lock()
+
+# Create Flask app for streaming
+app = Flask(__name__)
+
+# Get local IP address
+def get_local_ip():
+    try:
+        # Create a socket connection to determine the local IP
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # Doesn't need to be reachable
+        s.connect(('10.255.255.255', 1))
+        local_ip = s.getsockname()[0]
+        s.close()
+    except Exception:
+        local_ip = '127.0.0.1'  # Fallback to localhost
+    return local_ip
+
+@app.route('/')
+def index():
+    """Return a simple HTML page with the video stream embedded"""
+    return """
+    <html>
+    <head>
+        <title>Hand Gesture Control - Live Stream</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 20px; text-align: center; background-color: #f0f0f0; }
+            h1 { color: #333; }
+            .stream-container { margin: 20px auto; max-width: 95%; border: 3px solid #333; border-radius: 5px; }
+            img { width: 100%; height: auto; }
+            .info { margin: 20px; padding: 10px; background: #fff; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+            .fallback { margin: 20px; font-style: italic; }
+            .buttons { margin: 15px; }
+            button { padding: 8px 16px; margin: 0 10px; background-color: #4CAF50; color: white;
+                     border: none; border-radius: 4px; cursor: pointer; }
+            button:hover { background-color: #45a049; }
+        </style>
+    </head>
+    <body>
+        <h1>Hand Gesture Control - Live Stream</h1>
+        <div class="stream-container">
+            <img src="/video_feed" id="stream" alt="Live Stream" />
+        </div>
+        <div class="buttons">
+            <button onclick="refreshStream()">Refresh Stream</button>
+            <button onclick="toggleFallback()">Try Simple Mode</button>
+        </div>
+        <div class="fallback" id="fallbackInfo" style="display:none;">
+            <p>If the stream isn't working, you can try the <a href="/simple_feed">Simple Mode</a> or
+            refresh the page. Some browsers handle MJPEG streams better than others.</p>
+        </div>
+        <div class="info">
+            <h3>Hand Gesture Instructions:</h3>
+            <p>1. Show both hands with thumb and index finger pinching</p>
+            <p>2. Move hands apart/together to zoom in/out</p>
+            <p>3. Rotate hands to rotate the view</p>
+        </div>
+        <script>
+            // Wait a moment before showing fallback options
+            setTimeout(function() {
+                const img = document.getElementById('stream');
+                if (img.naturalWidth === 0) {
+                    document.getElementById('fallbackInfo').style.display = 'block';
+                }
+            }, 3000);
+
+            function refreshStream() {
+                const img = document.getElementById('stream');
+                img.src = "/video_feed?t=" + new Date().getTime();
+            }
+
+            function toggleFallback() {
+                window.location.href = "/simple_view";
+            }
+        </script>
+    </body>
+    </html>
+    """
+
+def generate_frames():
+    """Generate MJPEG frames for streaming"""
+    # Small delay at start to make sure frames are available
+    initial_delay = 0
+    while initial_delay < 10:  # Try for up to 1 second
+        with global_frame_lock:
+            if global_output_frame is not None:
+                break
+        time.sleep(0.1)
+        initial_delay += 1
+
+    if initial_delay >= 10:
+        # If no frames are available after waiting, yield an error image
+        blank_image = np.zeros((480, 640, 3), np.uint8)
+        cv2.putText(blank_image, "Waiting for camera...", (50, 240),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        flag, encoded_image = cv2.imencode('.jpg', blank_image)
+        if flag:
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + encoded_image.tobytes() + b'\r\n')
+
+    while True:
+        try:
+            # Wait until a new frame is available
+            with global_frame_lock:
+                if global_output_frame is None:
+                    time.sleep(0.05)
+                    continue
+
+                # Create a copy to avoid race conditions
+                frame_to_encode = global_output_frame.copy()
+
+            # Encode the frame as JPEG
+            flag, encoded_image = cv2.imencode('.jpg', frame_to_encode, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            if not flag:
+                time.sleep(0.05)
+                continue
+
+            # Yield the output frame in the byte format for MJPEG streaming
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + encoded_image.tobytes() + b'\r\n')
+
+            # Add a small delay to control frame rate
+            time.sleep(0.05)  # ~20 fps for streaming
+
+        except Exception as e:
+            print(f"Error in generate_frames: {e}")
+            time.sleep(0.1)
+            # On error, yield an error frame
+            try:
+                error_img = np.zeros((480, 640, 3), np.uint8)
+                cv2.putText(error_img, "Stream Error - Please Refresh", (50, 240),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                flag, encoded_error = cv2.imencode('.jpg', error_img)
+                if flag:
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + encoded_error.tobytes() + b'\r\n')
+            except:
+                pass
+
+@app.route('/video_feed')
+def video_feed():
+    """Video streaming route with proper headers for maximum compatibility"""
+    response = Response(generate_frames(),
+                      mimetype='multipart/x-mixed-replace; boundary=frame')
+    # Add headers for better browser compatibility
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    response.headers['Connection'] = 'close'
+    return response
+
+@app.route('/simple_view')
+def simple_view():
+    """A simpler viewing page that refreshes a static image"""
+    return """
+    <html>
+    <head>
+        <title>Hand Gesture Control - Simple Mode</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 20px; text-align: center; background-color: #f0f0f0; }
+            h1 { color: #333; }
+            .stream-container { margin: 20px auto; max-width: 95%; border: 3px solid #333; border-radius: 5px; }
+            img { width: 100%; height: auto; max-width: 800px; }
+            .info { margin: 20px; padding: 10px; background: #fff; border-radius: 5px; }
+            button { padding: 10px 20px; margin: 10px; cursor: pointer; }
+        </style>
+        <script>
+            function refreshImage() {
+                const img = document.getElementById('staticFrame');
+                img.src = "/frame?t=" + new Date().getTime();
+                document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+            }
+
+            // Auto-refresh every 500ms
+            setInterval(refreshImage, 500);
+        </script>
+    </head>
+    <body>
+        <h1>Hand Gesture Control - Simple Mode</h1>
+        <p>This mode uses simple image refreshing for better compatibility</p>
+        <div class="stream-container">
+            <img id="staticFrame" src="/frame" alt="Current Frame" />
+        </div>
+        <p>Last updated: <span id="lastUpdate">now</span></p>
+        <button onclick="refreshImage()">Refresh Now</button>
+        <button onclick="window.location.href='/'">Back to Standard Mode</button>
+        <div class="info">
+            <h3>Hand Gesture Instructions:</h3>
+            <p>1. Show both hands with thumb and index finger pinching</p>
+            <p>2. Move hands apart/together to zoom in/out</p>
+            <p>3. Rotate hands to rotate the view</p>
+        </div>
+    </body>
+    </html>
+    """
+
+@app.route('/frame')
+def frame():
+    """Serve a single current frame as JPEG"""
+    with global_frame_lock:
+        if global_output_frame is None:
+            # Return a blank frame if none is available
+            img = np.zeros((480, 640, 3), np.uint8)
+            cv2.putText(img, "No frame available", (50, 240),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        else:
+            img = global_output_frame.copy()
+
+    # Encode as JPEG
+    _, buffer = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    response = Response(buffer.tobytes(), mimetype='image/jpeg')
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
+
+def start_streaming_server(host='0.0.0.0', port=8080):
+    """Start the Flask server in a separate thread"""
+    try:
+        app.run(host=host, port=port, debug=False, threaded=True, use_reloader=False)
+    except Exception as e:
+        print(f"Error starting streaming server: {e}")
+        print("The stream may not be accessible. Check your network settings.")
 
 def main():
+    # Set up streaming server
+    local_ip = get_local_ip()
+    streaming_port = 8080  # Changed from 5000 to 8080 to avoid conflict with AirPlay on macOS
+
+    print(f"\n*** MJPEG Streaming Server ***")
+    print(f"Starting streaming server at http://{local_ip}:{streaming_port}")
+    print(f"You can access the stream from any device on your network using the above URL")
+    print(f"If this port is also in use, you can modify the streaming_port variable in the code.")
+
+    # Start the streaming server in a background thread
+    stream_thread = threading.Thread(target=lambda: start_streaming_server(port=streaming_port), daemon=True)
+    stream_thread.start()
+
+    # Access global frame variable
+    global global_output_frame
 
     option = 0
     backend = cv2.CAP_AVFOUNDATION
@@ -502,13 +746,22 @@ def main():
             cv2.putText(output_frame, f"Res: {frame.shape[1]}x{frame.shape[0]}", (10, 60),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
+            # Add streaming info
+            stream_info = f"Streaming: http://{local_ip}:{streaming_port}"
+            cv2.putText(output_frame, stream_info, (10, frame_h - 50),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+
             # Add instruction reminders
             cv2.putText(output_frame, "Pinch both hands: move apart = zoom, rotate = rotate",
                         (10, frame_h - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
             cv2.putText(output_frame, "Press 'r' to reset view",
                         (10, frame_h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
 
-            # Display the frame
+            # Update the global frame for streaming
+            with global_frame_lock:
+                global_output_frame = output_frame.copy()
+
+            # Display the frame locally
             cv2.imshow('Hand Gesture Zoom & Rotation Control', output_frame)
 
             # Key handling
