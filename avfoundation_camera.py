@@ -42,26 +42,34 @@ def main():
     curr_time = 0
     frame_count = 0
 
-    # Zoom control variables
+    # Zoom and rotation control variables
     zoom_scale = 1.0  # Initial zoom level (no zoom)
+    rotation_angle = 0.0  # Initial rotation angle in degrees
     min_zoom = 1.0
     max_zoom = 3.0
-    zoom_speed = 0.7  # Adjusted for two-hand gesture
+    min_rotation = -45.0  # Limit rotation to ±45 degrees for usability
+    max_rotation = 45.0
+    zoom_speed = 0.8 # Speed factor for zoom
+    rotation_speed = 2.0  # Speed factor for rotation
 
     # Two-hand gesture variables
     prev_hands_distance = None
+    prev_hands_angle = None
     zoom_smoothing = 0.2  # Lower value = smoother zoom but less responsive
-    two_hand_zoom_active = False
+    rotation_smoothing = 0.15  # Smoother rotation
+    two_hand_gesture_active = False
 
-    # For on-screen display of zoom control
+    # For on-screen display of control
     zoom_rect_size = 100
+    rotation_arc_radius = 50
 
     print("Starting video stream. Press 'q' to quit.")
-    print("\nTwo-Hand Zoom Gesture Instructions:")
+    print("\nTwo-Hand Gesture Instructions:")
     print("1. Show both hands with thumb and index finger pinching")
     print("2. Move hands diagonally apart from each other to zoom in")
     print("3. Move hands closer together to zoom out")
-    print("4. Press 'r' to reset zoom level")
+    print("4. Rotate your hands to rotate the view")
+    print("5. Press 'r' to reset zoom and rotation")
 
     # Variables to track frame stability
     consecutive_failures = 0
@@ -96,7 +104,19 @@ def main():
             # Get original frame dimensions
             frame_h, frame_w = frame.shape[:2]
 
-            # Apply zoom (center crop and resize)
+            # Step 1: Apply rotation if needed
+            if abs(rotation_angle) > 0.1:  # Only apply rotation if significant
+                # Calculate rotation matrix
+                center = (frame_w // 2, frame_h // 2)
+                rotation_matrix = cv2.getRotationMatrix2D(center, rotation_angle, 1.0)
+
+                # Apply rotation with border handling (black borders)
+                frame = cv2.warpAffine(frame, rotation_matrix, (frame_w, frame_h),
+                                      flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT,
+                                      borderValue=(0, 0, 0))
+
+            # Process current frame for transformation (zoom and rotation)
+            # Step 2: Apply zoom (center crop and resize)
             if zoom_scale > 1.0:
                 # Calculate the region to crop based on zoom level
                 crop_w = int(frame_w / zoom_scale)
@@ -132,8 +152,8 @@ def main():
             # Create output frame
             output_frame = frame.copy()
 
-            # Reset two-hand zoom active flag
-            two_hand_zoom_active = False
+            # Reset gesture active flag
+            two_hand_gesture_active = False
 
             # Data for pinch points
             pinch_points = []
@@ -195,7 +215,7 @@ def main():
 
                 # Now check if we have two valid pinch gestures for zoom control
                 if len(pinch_points) == 2 and valid_pinches[0] and valid_pinches[1]:
-                    two_hand_zoom_active = True
+                    two_hand_gesture_active = True
 
                     # Calculate distance between the two pinch points
                     hands_distance = math.sqrt(
@@ -203,42 +223,78 @@ def main():
                         (pinch_points[0][1] - pinch_points[1][1])**2
                     )
 
+                    # Calculate angle between the two pinch points
+                    dx = pinch_points[1][0] - pinch_points[0][0]
+                    dy = pinch_points[1][1] - pinch_points[0][1]
+                    current_angle = math.degrees(math.atan2(dy, dx))
+
                     # Draw connection line between pinch points
                     cv2.line(output_frame, pinch_points[0], pinch_points[1], (255, 255, 0), 2)
 
-                    # Display the distance
-                    distance_text = f"Distance: {hands_distance:.0f}px"
+                    # Display the distance and angle
                     midpoint_x = (pinch_points[0][0] + pinch_points[1][0]) // 2
                     midpoint_y = (pinch_points[0][1] + pinch_points[1][1]) // 2
+
+                    distance_text = f"Distance: {hands_distance:.0f}px"
                     cv2.putText(output_frame, distance_text,
                                 (midpoint_x - 70, midpoint_y),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
-                    # Update zoom based on the change in distance between hands
-                    if prev_hands_distance is not None:
-                        # Calculate delta movement
-                        delta = hands_distance - prev_hands_distance
+                    angle_text = f"Angle: {current_angle:.1f}°"
+                    cv2.putText(output_frame, angle_text,
+                                (midpoint_x - 70, midpoint_y + 25),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 200, 0), 2)
+
+                    # Update zoom and rotation based on changes
+                    if prev_hands_distance is not None and prev_hands_angle is not None:
+                        # Calculate distance delta for zoom
+                        distance_delta = hands_distance - prev_hands_distance
+
+                        # Calculate angle delta for rotation
+                        angle_delta = current_angle - prev_hands_angle
+                        # Normalize angle delta to handle wrap-around (e.g., 179° to -179°)
+                        if angle_delta > 180:
+                            angle_delta -= 360
+                        elif angle_delta < -180:
+                            angle_delta += 360
 
                         # Apply zoom change with smoothing
-                        if abs(delta) > 5:  # Small threshold to avoid tiny changes
-                            zoom_delta = delta * zoom_speed / 200.0  # Positive delta: hands apart = zoom in
+                        if abs(distance_delta) > 5:  # Small threshold to avoid tiny changes
+                            zoom_delta = distance_delta * zoom_speed / 200.0  # Positive delta: hands apart = zoom in
                             new_zoom = zoom_scale + zoom_delta
                             # Apply smoothing
                             zoom_scale = (1 - zoom_smoothing) * zoom_scale + zoom_smoothing * new_zoom
                             # Clamp to min/max range
                             zoom_scale = max(min_zoom, min(max_zoom, zoom_scale))
 
-                    # Update previous distance
+                        # Apply rotation change with smoothing
+                        if abs(angle_delta) > 0.5:  # Small threshold for rotation stability
+                            rotation_delta = angle_delta * rotation_speed
+                            new_rotation = rotation_angle + rotation_delta
+                            # Apply smoothing
+                            rotation_angle = (1 - rotation_smoothing) * rotation_angle + rotation_smoothing * new_rotation
+                            # Clamp to min/max range
+                            rotation_angle = max(min_rotation, min(max_rotation, rotation_angle))
+
+                    # Update previous values
                     prev_hands_distance = hands_distance
+                    prev_hands_angle = current_angle
+
                 else:
-                    # If not in two-hand pinch gesture, reset previous distance
+                    # If not in two-hand pinch gesture, reset previous values
                     if prev_hands_distance is not None:
                         prev_hands_distance = None
+                    if prev_hands_angle is not None:
+                        prev_hands_angle = None
 
-            # Display zoom level even when hands aren't detected
+            # Display zoom and rotation levels
             zoom_text = f"Zoom: {zoom_scale:.2f}x"
+            rotation_text = f"Rotation: {rotation_angle:.1f}°"
+
             cv2.putText(output_frame, zoom_text, (10, 120),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            cv2.putText(output_frame, rotation_text, (10, 150),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 200, 0), 2)
 
             # Draw zoom indicator rectangle
             rect_width = int(zoom_rect_size / max_zoom * zoom_scale)
@@ -249,12 +305,40 @@ def main():
             cv2.rectangle(output_frame,
                          (frame_w - zoom_rect_size - 10, 10),
                          (frame_w - zoom_rect_size - 10 + rect_width, 30),
-                         (0, 255, 255) if two_hand_zoom_active else (0, 200, 200), -1)
+                         (0, 255, 255) if two_hand_gesture_active else (0, 200, 200), -1)
 
-            # Display two-hand zoom status
-            zoom_status = "Active" if two_hand_zoom_active else "Inactive"
-            cv2.putText(output_frame, f"Two-Hand Zoom: {zoom_status}", (10, 180),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0) if two_hand_zoom_active else (200, 200, 200), 2)
+            # Draw rotation indicator arc
+            center_x = frame_w - rotation_arc_radius - 10
+            center_y = rotation_arc_radius + 50
+
+            # Draw arc background
+            cv2.ellipse(output_frame, (center_x, center_y), (rotation_arc_radius, rotation_arc_radius),
+                      0, 180, 360, (100, 100, 100), -1)
+
+            # Calculate arc angle based on rotation
+            rotation_percentage = (rotation_angle - min_rotation) / (max_rotation - min_rotation)
+            arc_angle = 180 + rotation_percentage * 180
+
+            # Draw active arc portion
+            cv2.ellipse(output_frame, (center_x, center_y), (rotation_arc_radius, rotation_arc_radius),
+                      0, 270, arc_angle, (255, 200, 0) if two_hand_gesture_active else (200, 150, 0), -1)
+
+            # Draw indicator line
+            indicator_angle_rad = math.radians(arc_angle - 90)
+            end_x = int(center_x + rotation_arc_radius * math.cos(indicator_angle_rad))
+            end_y = int(center_y + rotation_arc_radius * math.sin(indicator_angle_rad))
+            cv2.line(output_frame, (center_x, center_y), (end_x, end_y), (255, 255, 255), 2)
+
+            # Draw zero indicator
+            zero_x = int(center_x)
+            zero_y = int(center_y - rotation_arc_radius)
+            cv2.circle(output_frame, (zero_x, zero_y), 3, (255, 255, 255), -1)
+
+            # Display gesture status
+            gesture_status = "Active" if two_hand_gesture_active else "Inactive"
+            cv2.putText(output_frame, f"Gesture: {gesture_status}", (10, 180),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                        (255, 255, 0) if two_hand_gesture_active else (200, 200, 200), 2)
 
             # Display hand count
             hand_count = 0 if results.multi_hand_landmarks is None else len(results.multi_hand_landmarks)
@@ -267,22 +351,23 @@ def main():
             cv2.putText(output_frame, f"Res: {frame.shape[1]}x{frame.shape[0]}", (10, 60),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
-            # Add instruction reminder
-            cv2.putText(output_frame, "Pinch both hands, move apart to zoom", (10, frame_h - 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
-            cv2.putText(output_frame, "Press 'r' to reset zoom", (10, frame_h - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
+            # Add instruction reminders
+            cv2.putText(output_frame, "Pinch both hands: move apart = zoom, rotate = rotate",
+                        (10, frame_h - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
+            cv2.putText(output_frame, "Press 'r' to reset view",
+                        (10, frame_h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
 
             # Display the frame
-            cv2.imshow('Two-Hand Zoom Gesture Control', output_frame)
+            cv2.imshow('Hand Gesture Zoom & Rotation Control', output_frame)
 
             # Key handling
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
                 break
-            elif key == ord('r'):  # Reset zoom
+            elif key == ord('r'):  # Reset zoom and rotation
                 zoom_scale = 1.0
-                print("Zoom reset to 1.0x")
+                rotation_angle = 0.0
+                print("View reset: Zoom=1.0x, Rotation=0°")
 
         except Exception as e:
             print(f"Error processing frame: {e}")
