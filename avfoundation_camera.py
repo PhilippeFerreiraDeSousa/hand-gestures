@@ -1700,5 +1700,42 @@ def view_photos():
 
     return html
 
+@app.route('/minimal')
+def minimal_view():
+    """Return a minimal HTML page with only the video stream at 640x480"""
+    return """
+    <html>
+    <head>
+        <title>Video Feed</title>
+        <style>
+            body {
+                margin: 0;
+                padding: 0;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                background: black;
+                height: 100vh;
+            }
+            .video-container {
+                width: 640px;
+                height: 480px;
+                overflow: hidden;
+            }
+            img {
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="video-container">
+            <img src="/video_feed" id="stream" alt="Live Stream" />
+        </div>
+    </body>
+    </html>
+    """
+
 if __name__ == "__main__":
     main()
