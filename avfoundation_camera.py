@@ -1799,10 +1799,27 @@ def minimal_view():
                 });
             }
 
+            // Add event listeners for user interaction to unlock audio
+            function addAudioUnlockListeners() {
+                const events = ['click', 'touchstart', 'touchend', 'mousedown', 'mouseup', 'keydown', 'scroll'];
+                const unlockAudio = () => {
+                    initAudio();
+                    // Remove all event listeners once audio is unlocked
+                    events.forEach(event => {
+                        document.removeEventListener(event, unlockAudio);
+                    });
+                };
+                // Add listeners for all events
+                events.forEach(event => {
+                    document.addEventListener(event, unlockAudio);
+                });
+            }
+
             // Initialize when page loads
             window.onload = function() {
                 setupEventSource();
-                initAudio();
+                initAudio();  // Try initial auto-enable
+                addAudioUnlockListeners();  // Add listeners for user interaction
             };
         </script>
     </head>
