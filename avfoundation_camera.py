@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
-Direct AVFoundation Camera Access for macOS with MediaPipe Hand Detection
-This approach directly uses AVFoundation via OpenCV for more reliable camera access on macOS
+Camera Processing with MediaPipe Hand Detection
+Supports multiple video sources:
+- RTMP streams
+- AVFoundation Camera (macOS)
+- Standard webcams
 """
 
 import cv2
@@ -12,6 +15,8 @@ import math
 import threading
 from flask import Flask, Response
 import socket
+import argparse
+import sys
 
 # Global variables for sharing frames with the streaming server
 global_output_frame = None
@@ -245,14 +250,23 @@ USE_SMART_GLASSES = True
 HAND_DEPTH = 1.5 if USE_SMART_GLASSES else 2
 
 def main():
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Camera Processing with MediaPipe Hand Detection')
+    parser.add_argument('--rtmp', type=str, default="rtmp://10.0.0.215/live/r1NfNH-jkg",
+                        help='RTMP stream URL (default: rtmp://10.0.0.215/live/r1NfNH-jkg)')
+    parser.add_argument('--webcam', action='store_true', help='Use webcam instead of RTMP stream')
+    parser.add_argument('--webcam-id', type=int, default=0, help='Webcam device ID (default: 0)')
+    parser.add_argument('--port', type=int, default=8080, help='Streaming server port (default: 8080)')
+    args = parser.parse_args()
+
     # Set up streaming server
     local_ip = get_local_ip()
-    streaming_port = 8080  # Changed from 5000 to 8080 to avoid conflict with AirPlay on macOS
+    streaming_port = args.port  # Use the port from command line arguments
 
     print(f"\n*** MJPEG Streaming Server ***")
     print(f"Starting streaming server at http://{local_ip}:{streaming_port}")
     print(f"You can access the stream from any device on your network using the above URL")
-    print(f"If this port is also in use, you can modify the streaming_port variable in the code.")
+    print(f"If this port is also in use, you can modify the port using the --port argument.")
 
     # Start the streaming server in a background thread
     stream_thread = threading.Thread(target=lambda: start_streaming_server(port=streaming_port), daemon=True)
@@ -261,9 +275,48 @@ def main():
     # Access global frame variable
     global global_output_frame
 
-    option = 0
-    backend = cv2.CAP_AVFOUNDATION
-    cap = cv2.VideoCapture(option, backend)
+    # Initialize video capture based on source preference
+    cap = None
+
+    # Try to open the RTMP stream if not using webcam explicitly
+    if not args.webcam:
+        rtmp_url = args.rtmp
+        print(f"\nConnecting to RTMP stream: {rtmp_url}")
+        print("This may take a few seconds...")
+
+        # For RTMP streams, we don't need the AVFoundation backend
+        cap = cv2.VideoCapture(rtmp_url)
+
+        # Wait a bit to verify connection
+        time.sleep(2)
+
+        # Check if connection was successful
+        if not cap.isOpened():
+            print("Failed to connect to RTMP stream!")
+            cap = None
+
+    # Fall back to webcam if RTMP stream failed or webcam was explicitly requested
+    if cap is None or not cap.isOpened() or args.webcam:
+        if not args.webcam:
+            print("Falling back to webcam...")
+        else:
+            print("Using webcam as requested...")
+
+        option = args.webcam_id
+
+        # On macOS, use AVFoundation for better webcam access
+        if "darwin" in sys.platform:
+            backend = cv2.CAP_AVFOUNDATION
+            print("Using AVFoundation backend for macOS")
+        else:
+            backend = cv2.CAP_ANY
+
+        cap = cv2.VideoCapture(option, backend)
+
+    # Verify capture was successfully initialized
+    if not cap.isOpened():
+        print("Error: Could not open video source. Exiting.")
+        return
 
     # Check what resolution we actually got
     actual_width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
@@ -320,26 +373,69 @@ def main():
     # Variables to track frame stability
     consecutive_failures = 0
     max_failures = 5
+    reconnect_attempts = 0
+    max_reconnect_attempts = 3
+    last_frame_time = time.time()
+
+    # For RTMP stream buffering
+    buffering_needed = not args.webcam
+    buffer_frames = 5
+    buffered_frames = []
 
     while True:
         try:
+            # Check if we need to reconnect due to a stale stream
+            current_time = time.time()
+            if not args.webcam and consecutive_failures == 0 and current_time - last_frame_time > 10:
+                print("Stream appears to be stale. Attempting to reconnect...")
+                cap.release()
+                cap = cv2.VideoCapture(args.rtmp)
+                last_frame_time = current_time
+                buffering_needed = True
+
+            # Read a frame
             ret, frame = cap.read()
 
+            # Update last frame time on successful read
+            if ret and frame is not None:
+                last_frame_time = current_time
+
+                # For RTMP streams, implement simple buffering to reduce jitter
+                if buffering_needed:
+                    buffered_frames.append(frame)
+                    if len(buffered_frames) < buffer_frames:
+                        # Skip processing until we have enough frames buffered
+                        continue
+                    else:
+                        frame = buffered_frames.pop(0)  # Use the oldest frame
+
+            # Handle frame reading failures
             if not ret or frame is None:
                 consecutive_failures += 1
                 print(f"Failed to get frame (attempt {consecutive_failures}/{max_failures})...")
 
                 if consecutive_failures >= max_failures:
-                    print("Too many consecutive failures. Attempting to reset the camera...")
-                    cap.release()
-                    print("Exiting.")
+                    # For RTMP streams, try to reconnect
+                    if not args.webcam and reconnect_attempts < max_reconnect_attempts:
+                        print(f"Attempting to reconnect to RTMP stream (attempt {reconnect_attempts+1}/{max_reconnect_attempts})...")
+                        cap.release()
+                        time.sleep(2)  # Give some time before reconnecting
+                        cap = cv2.VideoCapture(args.rtmp)
+                        consecutive_failures = 0
+                        reconnect_attempts += 1
+                        buffering_needed = True
+                        buffered_frames = []
+                        continue
+
+                    print("Too many consecutive failures. Exiting.")
                     break
 
                 time.sleep(0.1)
                 continue
 
-            # Reset failure counter on success
+            # Reset failure and reconnect counters on success
             consecutive_failures = 0
+            reconnect_attempts = 0
 
             # Update FPS
             frame_count += 1

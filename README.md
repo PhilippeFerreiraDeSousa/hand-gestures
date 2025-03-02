@@ -133,3 +133,13 @@ If you encounter issues with the webcam on Windows:
 - If the webcam cannot be accessed, try changing the camera index in the code from 0 to 1 or another value
 - If you encounter performance issues, try reducing the resolution in the code
 - For GPU acceleration, ensure you have the appropriate CUDA libraries installed 
+
+# End to end
+
+```
+python avfoundation_camera.py --rtmp rtmp://10.0.0.215/live/r1NfNH-jk
+```
+Check input integrity with :
+```
+ffplay rtmp://10.0.0.215/live/r1NfNH-jkg
+```
