@@ -1054,32 +1054,32 @@ def main():
 
                 # Check if both hands form L-shapes and are in opposite corners
                 l_shape_detected = False
-                print(f"l_shape_left_detected: {l_shape_left_detected}")
-                print(f"l_shape_right_detected: {l_shape_right_detected}")
-                print(f"left_l_shape_pos: {left_l_shape_pos}")
-                print(f"right_l_shape_pos: {right_l_shape_pos}")
                 if l_shape_left_detected and l_shape_right_detected and left_l_shape_pos and right_l_shape_pos:
                     # Calculate if L-shapes form opposite corners
                     left_x, left_y = left_l_shape_pos
                     right_x, right_y = right_l_shape_pos
 
-                    # Check if hands form diagonal corners (one in top-left/bottom-right, other in opposite)
-                    x_diff = abs(right_x - left_x)
-                    y_diff = abs(right_y - left_y)
+                    # Transform the corner positions
+                    left_transformed = transform_point((int(left_x), int(left_y)), frame_w, frame_h, zoom_scale, rotation_angle)
+                    right_transformed = transform_point((int(right_x), int(right_y)), frame_w, frame_h, zoom_scale, rotation_angle)
+
+                    # Use transformed coordinates for distance checks
+                    x_diff = abs(right_transformed[0] - left_transformed[0])
+                    y_diff = abs(right_transformed[1] - left_transformed[1])
 
                     # Minimum distance between hands to form a frame
                     min_frame_size = frame_w * 0.2  # 20% of frame width
 
                     if x_diff > min_frame_size and y_diff > min_frame_size:
                         # Check if hands form opposite corners
-                        if (left_x < right_x and left_y < right_y) or \
-                           (left_x < right_x and left_y > right_y) or \
-                           (left_x > right_x and left_y < right_y) or \
-                           (left_x > right_x and left_y > right_y):
+                        if (left_transformed[0] < right_transformed[0] and left_transformed[1] < right_transformed[1]) or \
+                           (left_transformed[0] < right_transformed[0] and left_transformed[1] > right_transformed[1]) or \
+                           (left_transformed[0] > right_transformed[0] and left_transformed[1] < right_transformed[1]) or \
+                           (left_transformed[0] > right_transformed[0] and left_transformed[1] > right_transformed[1]):
                             l_shape_detected = True
 
-                            # Draw the frame outline
-                            corners = [(int(left_x), int(left_y)), (int(right_x), int(right_y))]
+                            # Draw the frame outline using transformed coordinates
+                            corners = [left_transformed, right_transformed]
                             x_coords = [x for x, y in corners]
                             y_coords = [y for x, y in corners]
                             frame_left = min(x_coords)
