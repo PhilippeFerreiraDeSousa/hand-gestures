@@ -46,21 +46,21 @@ def main():
     zoom_scale = 1.0  # Initial zoom level (no zoom)
     min_zoom = 1.0
     max_zoom = 3.0
-    zoom_speed = 0.1
+    zoom_speed = 0.7  # Adjusted for two-hand gesture
 
-    # Pinch gesture variables
-    prev_pinch_distance = None
+    # Two-hand gesture variables
+    prev_hands_distance = None
     zoom_smoothing = 0.2  # Lower value = smoother zoom but less responsive
+    two_hand_zoom_active = False
 
     # For on-screen display of zoom control
-    pinch_active = False
     zoom_rect_size = 100
 
     print("Starting video stream. Press 'q' to quit.")
-    print("\nZoom Gesture Instructions:")
-    print("1. Show one hand with thumb and index finger extended")
-    print("2. Pinch thumb and index finger together to zoom in")
-    print("3. Move thumb and index finger apart to zoom out")
+    print("\nTwo-Hand Zoom Gesture Instructions:")
+    print("1. Show both hands with thumb and index finger pinching")
+    print("2. Move hands diagonally apart from each other to zoom in")
+    print("3. Move hands closer together to zoom out")
     print("4. Press 'r' to reset zoom level")
 
     # Variables to track frame stability
@@ -132,11 +132,16 @@ def main():
             # Create output frame
             output_frame = frame.copy()
 
-            # Reset pinch active flag
-            pinch_active = False
+            # Reset two-hand zoom active flag
+            two_hand_zoom_active = False
+
+            # Data for pinch points
+            pinch_points = []
+            valid_pinches = []
 
             # Check if hand landmarks are detected
             if results.multi_hand_landmarks:
+                # First, process all hands to detect pinch gestures
                 for hand_idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
                     # Draw the hand landmarks and connections
                     mp_drawing.draw_landmarks(
@@ -147,7 +152,7 @@ def main():
                         mp_drawing_styles.get_default_hand_connections_style()
                     )
 
-                    # Extract thumb and index finger landmarks for zoom gesture
+                    # Extract thumb and index finger landmarks for pinch gesture detection
                     thumb_tip = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_TIP]
                     index_tip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
 
@@ -159,58 +164,76 @@ def main():
                     # Calculate distance between thumb and index finger (pinch gesture)
                     pinch_distance = math.sqrt((thumb_x - index_x)**2 + (thumb_y - index_y)**2)
 
-                    # Check if this is a pinching gesture (by checking if other fingers are closed)
-                    # Simple heuristic: check position of middle finger compared to index
-                    middle_tip = hand_landmarks.landmark[mp_hands.HandLandmark.MIDDLE_FINGER_TIP]
-                    ring_tip = hand_landmarks.landmark[mp_hands.HandLandmark.RING_FINGER_TIP]
-                    pinky_tip = hand_landmarks.landmark[mp_hands.HandLandmark.PINKY_TIP]
+                    # Calculate pinch point (midpoint between thumb and index)
+                    pinch_x = (thumb_x + index_x) // 2
+                    pinch_y = (thumb_y + index_y) // 2
+                    pinch_point = (pinch_x, pinch_y)
 
-                    # Middle knuckle as reference point
-                    middle_mcp = hand_landmarks.landmark[mp_hands.HandLandmark.MIDDLE_FINGER_MCP]
+                    # Check if this is a pinching gesture
+                    # We'll consider it a pinch if thumb and index are close enough
+                    is_pinching = pinch_distance < 50  # Adjust threshold as needed
 
-                    # Check if other fingers are curled (lower y value means higher on screen in image coordinates)
-                    other_fingers_curled = (
-                        middle_tip.y > middle_mcp.y and
-                        ring_tip.y > middle_mcp.y and
-                        pinky_tip.y > middle_mcp.y
+                    # Store the pinch point and validity
+                    pinch_points.append(pinch_point)
+                    valid_pinches.append(is_pinching)
+
+                    # Draw pinch visualization
+                    pinch_color = (0, 255, 0) if is_pinching else (0, 0, 255)
+                    # Draw line between thumb and index finger
+                    cv2.line(output_frame, (thumb_x, thumb_y), (index_x, index_y), pinch_color, 2)
+                    # Draw circles at fingertips
+                    cv2.circle(output_frame, (thumb_x, thumb_y), 8, (255, 0, 0), -1)
+                    cv2.circle(output_frame, (index_x, index_y), 8, (0, 0, 255), -1)
+                    # Draw pinch point
+                    cv2.circle(output_frame, pinch_point, 12, pinch_color, -1 if is_pinching else 2)
+
+                    # Add pinch label
+                    pinch_status = "Pinched" if is_pinching else "Not Pinched"
+                    cv2.putText(output_frame, f"Hand {hand_idx+1}: {pinch_status}",
+                                (pinch_x - 70, pinch_y - 15),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, pinch_color, 2)
+
+                # Now check if we have two valid pinch gestures for zoom control
+                if len(pinch_points) == 2 and valid_pinches[0] and valid_pinches[1]:
+                    two_hand_zoom_active = True
+
+                    # Calculate distance between the two pinch points
+                    hands_distance = math.sqrt(
+                        (pinch_points[0][0] - pinch_points[1][0])**2 +
+                        (pinch_points[0][1] - pinch_points[1][1])**2
                     )
 
-                    # If we detect a proper pinch gesture (thumb, index extended, others curled)
-                    if other_fingers_curled:
-                        pinch_active = True
+                    # Draw connection line between pinch points
+                    cv2.line(output_frame, pinch_points[0], pinch_points[1], (255, 255, 0), 2)
 
-                        # Draw line between thumb and index finger
-                        cv2.line(output_frame, (thumb_x, thumb_y), (index_x, index_y), (0, 255, 0), 2)
+                    # Display the distance
+                    distance_text = f"Distance: {hands_distance:.0f}px"
+                    midpoint_x = (pinch_points[0][0] + pinch_points[1][0]) // 2
+                    midpoint_y = (pinch_points[0][1] + pinch_points[1][1]) // 2
+                    cv2.putText(output_frame, distance_text,
+                                (midpoint_x - 70, midpoint_y),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
-                        # Draw circles at fingertips
-                        cv2.circle(output_frame, (thumb_x, thumb_y), 8, (255, 0, 0), -1)
-                        cv2.circle(output_frame, (index_x, index_y), 8, (0, 0, 255), -1)
+                    # Update zoom based on the change in distance between hands
+                    if prev_hands_distance is not None:
+                        # Calculate delta movement
+                        delta = hands_distance - prev_hands_distance
 
-                        # Calculate and display distance
-                        pinch_distance_text = f"Pinch: {pinch_distance:.0f}px"
-                        cv2.putText(output_frame, pinch_distance_text, (10, 150),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+                        # Apply zoom change with smoothing
+                        if abs(delta) > 5:  # Small threshold to avoid tiny changes
+                            zoom_delta = delta * zoom_speed / 200.0  # Positive delta: hands apart = zoom in
+                            new_zoom = zoom_scale + zoom_delta
+                            # Apply smoothing
+                            zoom_scale = (1 - zoom_smoothing) * zoom_scale + zoom_smoothing * new_zoom
+                            # Clamp to min/max range
+                            zoom_scale = max(min_zoom, min(max_zoom, zoom_scale))
 
-                        # Update zoom based on pinch distance
-                        if prev_pinch_distance is not None:
-                            # Calculate delta movement
-                            delta = pinch_distance - prev_pinch_distance
-
-                            # Apply zoom change with smoothing
-                            if abs(delta) > 2:  # Small threshold to avoid tiny changes
-                                zoom_delta = -delta * zoom_speed / 100.0  # Negative delta: pinch in = zoom in
-                                new_zoom = zoom_scale + zoom_delta
-                                # Apply smoothing
-                                zoom_scale = (1 - zoom_smoothing) * zoom_scale + zoom_smoothing * new_zoom
-                                # Clamp to min/max range
-                                zoom_scale = max(min_zoom, min(max_zoom, zoom_scale))
-
-                        # Update previous distance
-                        prev_pinch_distance = pinch_distance
-                    else:
-                        # If not in pinch gesture, gradually reset previous distance
-                        if prev_pinch_distance is not None:
-                            prev_pinch_distance = None
+                    # Update previous distance
+                    prev_hands_distance = hands_distance
+                else:
+                    # If not in two-hand pinch gesture, reset previous distance
+                    if prev_hands_distance is not None:
+                        prev_hands_distance = None
 
             # Display zoom level even when hands aren't detected
             zoom_text = f"Zoom: {zoom_scale:.2f}x"
@@ -226,11 +249,16 @@ def main():
             cv2.rectangle(output_frame,
                          (frame_w - zoom_rect_size - 10, 10),
                          (frame_w - zoom_rect_size - 10 + rect_width, 30),
-                         (0, 255, 255) if pinch_active else (0, 200, 200), -1)
+                         (0, 255, 255) if two_hand_zoom_active else (0, 200, 200), -1)
+
+            # Display two-hand zoom status
+            zoom_status = "Active" if two_hand_zoom_active else "Inactive"
+            cv2.putText(output_frame, f"Two-Hand Zoom: {zoom_status}", (10, 180),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0) if two_hand_zoom_active else (200, 200, 200), 2)
 
             # Display hand count
             hand_count = 0 if results.multi_hand_landmarks is None else len(results.multi_hand_landmarks)
-            cv2.putText(output_frame, f"Hands: {hand_count}", (10, 90),
+            cv2.putText(output_frame, f"Hands: {hand_count}/2", (10, 90),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
 
             # Display FPS and info
@@ -239,8 +267,14 @@ def main():
             cv2.putText(output_frame, f"Res: {frame.shape[1]}x{frame.shape[0]}", (10, 60),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
+            # Add instruction reminder
+            cv2.putText(output_frame, "Pinch both hands, move apart to zoom", (10, frame_h - 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
+            cv2.putText(output_frame, "Press 'r' to reset zoom", (10, frame_h - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
+
             # Display the frame
-            cv2.imshow('MediaPipe Hand Detection with Zoom', output_frame)
+            cv2.imshow('Two-Hand Zoom Gesture Control', output_frame)
 
             # Key handling
             key = cv2.waitKey(1) & 0xFF
