@@ -109,7 +109,7 @@ def index():
             <p>1. Show both hands with thumb and index finger pinching</p>
             <p>2. Move hands apart/together to zoom in/out</p>
             <p>3. Rotate hands to rotate the view</p>
-            <p>4. Quickly bring pinched hands together to "take a photo" (plays camera sound)</p>
+            <p>4. Make an L-shape with both hands' index fingers and click with right index finger to "take a photo" (plays camera sound)</p>
         </div>
         <!-- White flash effect for camera -->
         <div id="flash" class="flash"></div>
@@ -612,7 +612,7 @@ def simple_view():
             <p>1. Show both hands with thumb and index finger pinching</p>
             <p>2. Move hands apart/together to zoom in/out</p>
             <p>3. Rotate hands to rotate the view</p>
-            <p>4. Quickly bring pinched hands together to "take a photo" (plays camera sound)</p>
+            <p>4. Make an L-shape with both hands' index fingers and click with right index finger to "take a photo" (plays camera sound)</p>
         </div>
         <!-- White flash effect for camera -->
         <div id="flash" class="flash"></div>
@@ -774,6 +774,24 @@ def main():
     recent_distances_max_len = 5  # How many recent distances to keep
     last_photo_time = 0  # Time when the last photo was taken
 
+    # Camera frame gesture variables
+    l_shape_detected = False
+    right_index_pressed = False
+    right_index_start_y = None
+    camera_frame_active = False
+    camera_frame_hold_duration = 0
+    camera_frame_cooldown = 0
+    last_camera_frame_time = 0
+
+    # Constants for gesture detection
+    camera_frame_cooldown_frames = 15  # Number of frames to wait before allowing another photo
+    camera_frame_required_duration = 5  # Number of frames to hold gesture before taking photo
+    right_index_press_threshold = 20  # Pixels of movement for index press
+    l_shape_min_angle = 70  # Minimum angle for L-shape (degrees)
+    l_shape_max_angle = 110  # Maximum angle for L-shape (degrees)
+    min_l_shape_size = 50  # Minimum size of L-shape in pixels
+    max_l_shape_size = 200  # Maximum size of L-shape in pixels
+
     # For on-screen display of control
     zoom_rect_size = 100
     rotation_arc_radius = 50
@@ -917,6 +935,36 @@ def main():
             # Create output frame for display
             output_frame = display_frame.copy()
 
+            # Function to transform coordinates based on zoom and rotation
+            def transform_point(point, frame_w, frame_h, zoom_scale, rotation_angle):
+                x, y = point
+                # Apply zoom transformation
+                if zoom_scale > 1.0:
+                    # Convert to relative coordinates
+                    rel_x = x - frame_w / 2
+                    rel_y = y - frame_h / 2
+                    # Apply zoom
+                    rel_x *= zoom_scale
+                    rel_y *= zoom_scale
+                    # Convert back to absolute coordinates
+                    x = rel_x + frame_w / 2
+                    y = rel_y + frame_h / 2
+
+                # Apply rotation transformation
+                if abs(rotation_angle) > 0.1:
+                    # Convert to relative coordinates
+                    rel_x = x - frame_w / 2
+                    rel_y = y - frame_h / 2
+                    # Apply rotation (invert angle to match display rotation)
+                    angle_rad = math.radians(-rotation_angle)  # Invert angle here
+                    rot_x = rel_x * math.cos(angle_rad) - rel_y * math.sin(angle_rad)
+                    rot_y = rel_x * math.sin(angle_rad) + rel_y * math.cos(angle_rad)
+                    # Convert back to absolute coordinates
+                    x = rot_x + frame_w / 2
+                    y = rot_y + frame_h / 2
+
+                return (int(x), int(y))
+
             # Reset gesture active flag
             two_hand_gesture_active = False
 
@@ -929,131 +977,168 @@ def main():
 
             # Check if hand landmarks are detected
             if results.multi_hand_landmarks:
-                # First, process all hands to detect pinch gestures
+                # Reset camera frame gesture states at the start of each frame
+                l_shape_left_detected = False
+                l_shape_right_detected = False
+                current_right_index_y = None
+
+                # Process each hand
                 for hand_idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
-                    # Get pixel coordinates from original frame
-                    h, w, c = original_frame.shape
-                    hand_points = []
+                    # Get handedness
+                    handedness = results.multi_handedness[hand_idx].classification[0].label
+                    is_right_hand = (handedness == "Right")
 
-                    # Extract thumb and index finger landmarks for pinch gesture detection
-                    thumb_tip = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_TIP]
-                    index_tip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
+                    # Store landmarks for this hand
+                    landmark_points = []
+                    for landmark in hand_landmarks.landmark:
+                        # Convert normalized coordinates to pixel coordinates
+                        x = int(landmark.x * frame_w)
+                        y = int(landmark.y * frame_h)
+                        # Transform the point
+                        transformed_point = transform_point((x, y), frame_w, frame_h, zoom_scale, rotation_angle)
+                        landmark_points.append(transformed_point)
 
-                    # Get pixel coordinates
-                    thumb_x, thumb_y = int(thumb_tip.x * w), int(thumb_tip.y * h)
-                    index_x, index_y = int(index_tip.x * w), int(index_tip.y * h)
-
-                    # Calculate distance between thumb and index finger (pinch gesture)
-                    pinch_distance = math.sqrt((thumb_x - index_x)**2 + (thumb_y - index_y)**2)
+                    # Get thumb and index finger landmarks for pinch detection
+                    thumb_tip = landmark_points[4]
+                    index_tip = landmark_points[8]
 
                     # Calculate pinch point (midpoint between thumb and index)
-                    pinch_x = (thumb_x + index_x) // 2
-                    pinch_y = (thumb_y + index_y) // 2
+                    pinch_x = (thumb_tip[0] + index_tip[0]) // 2
+                    pinch_y = (thumb_tip[1] + index_tip[1]) // 2
                     pinch_point = (pinch_x, pinch_y)
 
-                    # Store the original pinch point for gesture calculations
-                    original_pinch_point = pinch_point
+                    # Calculate distance between thumb and index finger
+                    pinch_distance = math.sqrt(
+                        (thumb_tip[0] - index_tip[0])**2 +
+                        (thumb_tip[1] - index_tip[1])**2
+                    )
 
-                    # Check if this is a pinching gesture
-                    # We'll consider it a pinch if thumb and index are close enough
-                    is_pinching = pinch_distance < 100 / HAND_DEPTH  # Adjust threshold as needed
+                    # Determine if pinching (distance threshold)
+                    is_pinching = pinch_distance < 100 / HAND_DEPTH
 
-                    # Store the pinch point and validity
-                    pinch_points.append(original_pinch_point)
-                    valid_pinches.append(is_pinching)
+                    # Store original pinch point for gesture calculations
+                    if is_pinching:
+                        pinch_points.append(pinch_point)
+                        valid_pinches.append(True)
+                    else:
+                        valid_pinches.append(False)
 
-                    # Transform coordinates to match display transformations
-                    # We need to transform in reverse order: first zoom, then rotate
+                    # Store transformed landmarks and pinch data
+                    transformed_landmarks.append({
+                        "landmarks": landmark_points,
+                        "thumb": thumb_tip,
+                        "index": index_tip,
+                        "pinch": pinch_point,
+                        "is_pinching": is_pinching,
+                        "hand_idx": hand_idx
+                    })
 
-                    # Transform: Apply zoom transformation to coordinates
-                    transformed_thumb_x, transformed_thumb_y = thumb_x, thumb_y
-                    transformed_index_x, transformed_index_y = index_x, index_y
-                    transformed_pinch_x, transformed_pinch_y = pinch_x, pinch_y
+                    # Process camera frame gesture
+                    is_l_shape, index_y = process_photo_taking_gesture(
+                        hand_landmarks, frame_w, frame_h
+                    )
+                    # if is_l_shape:
+                    #     print(f"L-shape detected at {index_y}")
+                    #     print(f"is_right_hand: {is_right_hand}")
 
-                    if zoom_scale > 1.0:
-                        # Calculate zoom transformation for coordinates
-                        center_x, center_y = frame_w // 2, frame_h // 2
-                        # Scale coordinates from center
-                        transformed_thumb_x = int(center_x + (thumb_x - center_x) * zoom_scale)
-                        transformed_thumb_y = int(center_y + (thumb_y - center_y) * zoom_scale)
-                        transformed_index_x = int(center_x + (index_x - center_x) * zoom_scale)
-                        transformed_index_y = int(center_y + (index_y - center_y) * zoom_scale)
-                        transformed_pinch_x = int(center_x + (pinch_x - center_x) * zoom_scale)
-                        transformed_pinch_y = int(center_y + (pinch_y - center_y) * zoom_scale)
+                    # Update hand states
+                    if is_right_hand:
+                        current_right_index_y = index_y
+                        l_shape_right_detected = is_l_shape
+                    else:
+                        l_shape_left_detected = is_l_shape
 
-                    # Transform: Apply rotation to coordinates if needed
-                    if abs(rotation_angle) > 0.1:
-                        # We need to apply the inverse rotation to the coordinates
-                        # since we're transforming from original to rotated space
-                        inverse_angle = -rotation_angle
-                        center = (frame_w // 2, frame_h // 2)
+                l_shape_detected = l_shape_left_detected and l_shape_right_detected
+                if l_shape_detected:
+                    print("Both hands in L-shape")
+                elif l_shape_left_detected:
+                    print("Left hand in L-shape")
+                elif l_shape_right_detected:
+                    print("Right hand in L-shape")
+                # else:
+                #     print("No L-shape detected")
 
-                        # Rotation formulas
-                        cos_angle = math.cos(math.radians(inverse_angle))
-                        sin_angle = math.sin(math.radians(inverse_angle))
+                    # print(f"l_shape_detected: {l_shape_detected}")
+                    # print(f"l_shape_left_detected: {l_shape_left_detected}")
+                    # print(f"l_shape_right_detected: {l_shape_right_detected}")
 
-                        # Apply rotation to thumb coordinates
-                        thumb_dx = transformed_thumb_x - center[0]
-                        thumb_dy = transformed_thumb_y - center[1]
-                        transformed_thumb_x = int(center[0] + thumb_dx * cos_angle - thumb_dy * sin_angle)
-                        transformed_thumb_y = int(center[1] + thumb_dx * sin_angle + thumb_dy * cos_angle)
+                # Process right index finger press when both hands form L-shape
+                if l_shape_detected:
+                    if right_index_start_y is None:
+                        right_index_start_y = current_right_index_y
+                    elif current_right_index_y - right_index_start_y > right_index_press_threshold:
+                        right_index_pressed = True
+                else:
+                    right_index_start_y = None
+                    right_index_pressed = False
 
-                        # Apply rotation to index coordinates
-                        index_dx = transformed_index_x - center[0]
-                        index_dy = transformed_index_y - center[1]
-                        transformed_index_x = int(center[0] + index_dx * cos_angle - index_dy * sin_angle)
-                        transformed_index_y = int(center[1] + index_dx * sin_angle + index_dy * cos_angle)
+                # print(f"l_shape_detected: {l_shape_detected}")
+                # print(f"right_index_pressed: {right_index_pressed}")
 
-                        # Apply rotation to pinch point
-                        pinch_dx = transformed_pinch_x - center[0]
-                        pinch_dy = transformed_pinch_y - center[1]
-                        transformed_pinch_x = int(center[0] + pinch_dx * cos_angle - pinch_dy * sin_angle)
-                        transformed_pinch_y = int(center[1] + pinch_dx * sin_angle + pinch_dy * cos_angle)
+                # Update camera frame active state
+                print(f"Condition 1: {l_shape_detected}")
+                if l_shape_detected:
+                    print(f"Condition 2: {right_index_pressed} and {camera_frame_cooldown == 0}")
+                    if right_index_pressed and camera_frame_cooldown == 0:
+                        print(f"Condition 3: {camera_frame_hold_duration} >= {camera_frame_required_duration}")
+                        camera_frame_hold_duration += 1
+                        if camera_frame_hold_duration >= camera_frame_required_duration:
+                            print(f"Condition 4: {current_time - last_camera_frame_time}")
+                            # Take photo
+                            current_time = time.time()
+                            if current_time - last_camera_frame_time > 1.0:
+                                print("Taking photo with camera frame gesture!")
 
-                    # Use transformed coordinates for drawing
-                    transformed_pinch_point = (transformed_pinch_x, transformed_pinch_y)
+                                # Create timestamp for filenames
+                                timestamp = time.strftime('%Y%m%d_%H%M%S')
 
-                    # Create a transformed version of hand_landmarks for drawing
-                    transformed_landmark = {"hand_idx": hand_idx,
-                                           "thumb": (transformed_thumb_x, transformed_thumb_y),
-                                           "index": (transformed_index_x, transformed_index_y),
-                                           "pinch": transformed_pinch_point,
-                                           "is_pinching": is_pinching}
-                    transformed_landmarks.append(transformed_landmark)
+                                # Save photos
+                                if not os.path.exists('static'):
+                                    os.makedirs('static')
 
-                    # Transform all landmarks for this hand and store them
-                    transformed_landmark_points = []
-                    for landmark in hand_landmarks.landmark:
-                        # Get pixel coordinates
-                        lm_x, lm_y = int(landmark.x * w), int(landmark.y * h)
+                                transformed_filename = f"photo_{timestamp}_transformed.jpg"
+                                cv2.imwrite(os.path.join('static', transformed_filename), output_frame)
 
-                        # Apply zoom transformation
-                        transformed_lm_x, transformed_lm_y = lm_x, lm_y
-                        if zoom_scale > 1.0:
-                            # Scale coordinates from center
-                            center_x, center_y = frame_w // 2, frame_h // 2
-                            transformed_lm_x = int(center_x + (lm_x - center_x) * zoom_scale)
-                            transformed_lm_y = int(center_y + (lm_y - center_y) * zoom_scale)
+                                original_filename = f"photo_{timestamp}_original.jpg"
+                                cv2.imwrite(os.path.join('static', original_filename), original_frame)
 
-                        # Apply rotation transformation
-                        if abs(rotation_angle) > 0.1:
-                            inverse_angle = -rotation_angle
-                            center = (frame_w // 2, frame_h // 2)
+                                print(f"Photos saved as {transformed_filename} and {original_filename}")
 
-                            # Rotation formulas
-                            cos_angle = math.cos(math.radians(inverse_angle))
-                            sin_angle = math.sin(math.radians(inverse_angle))
+                                # Notify web clients
+                                notify_clients_photo_taken(transformed_filename)
 
-                            # Apply rotation to landmark coordinates
-                            lm_dx = transformed_lm_x - center[0]
-                            lm_dy = transformed_lm_y - center[1]
-                            transformed_lm_x = int(center[0] + lm_dx * cos_angle - lm_dy * sin_angle)
-                            transformed_lm_y = int(center[1] + lm_dx * sin_angle + lm_dy * cos_angle)
+                                # Reset states
+                                camera_frame_cooldown = camera_frame_cooldown_frames
+                                camera_frame_hold_duration = 0
+                                last_camera_frame_time = current_time
+                    else:
+                        camera_frame_hold_duration = 0
+                else:
+                    camera_frame_hold_duration = 0
 
-                        transformed_landmark_points.append((transformed_lm_x, transformed_lm_y))
+                # Update camera frame cooldown
+                if camera_frame_cooldown > 0:
+                    camera_frame_cooldown -= 1
 
-                    # Add the full set of transformed landmark points to our record
-                    transformed_landmark["landmarks"] = transformed_landmark_points
+                # Display camera frame gesture status
+                if camera_frame_cooldown > 0:
+                    status_text = "Photo taken!"
+                    status_color = (0, 255, 255)
+                elif l_shape_detected:
+                    if right_index_pressed:
+                        status_text = "Taking photo..."
+                        status_color = (0, 255, 0)
+                    else:
+                        status_text = "Press shutter"
+                        status_color = (0, 255, 0)
+                else:
+                    status_text = "Make camera frame with both hands"
+                    status_color = (200, 200, 200)
+
+                # Display the status text
+                cv2.putText(output_frame, status_text,
+                            (frame_w // 2 - 100, frame_h - 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
 
                 # Now draw all hand landmarks with the correct transformations
                 # Define hand connections for manual drawing
@@ -1208,33 +1293,33 @@ def main():
 
                                 # Photo gesture detected!
                                 print(f"Photo gesture detected! Distance velocity: {distance_velocity:.1f}")
-                                
+
                                 # Create timestamp for filenames
                                 timestamp = time.strftime('%Y%m%d_%H%M%S')
-                                
+
                                 # Check if we need to create a static directory
                                 if not os.path.exists('static'):
                                     os.makedirs('static')
                                     print("Created static directory for storing photos and sounds")
-                                
+
                                 # Save the transformed frame (with zoom and rotation)
                                 transformed_filename = f"photo_{timestamp}_transformed.jpg"
                                 cv2.imwrite(os.path.join('static', transformed_filename), output_frame)
-                                
+
                                 # Also save the original frame for reference
                                 original_filename = f"photo_{timestamp}_original.jpg"
                                 cv2.imwrite(os.path.join('static', original_filename), original_frame)
-                                
+
                                 print(f"Photos saved as:")
                                 print(f"  - {transformed_filename} (with zoom: {zoom_scale:.2f}x, rotation: {rotation_angle:.1f}°)")
                                 print(f"  - {original_filename} (original frame)")
-                                
+
                                 # Store the filename for access in web interface
                                 latest_photo = transformed_filename
-                                
+
                                 # Notify web clients to play sound and show flash
                                 notify_clients_photo_taken(transformed_filename)
-                                
+
                                 # Start cooldown period to prevent multiple triggers
                                 photo_gesture_cooldown = photo_cooldown_frames
                                 last_photo_time = current_time
@@ -1666,6 +1751,57 @@ def minimal_view():
     </body>
     </html>
     """
+
+def process_photo_taking_gesture(hand_landmarks, frame_w, frame_h):
+    """
+    Process hand landmarks to detect L-shape camera frame gesture.
+    Returns (is_l_shape, index_y) tuple where:
+    - is_l_shape: boolean indicating if hand forms an L-shape
+    - index_y: y-coordinate of index finger tip for press detection
+    """
+    # Constants for L-shape detection
+    min_l_shape_size = 50  # Minimum size of L-shape in pixels
+    max_l_shape_size = 200  # Maximum size of L-shape in pixels
+    l_shape_min_angle = 70  # Minimum angle for L-shape (degrees)
+    l_shape_max_angle = 110  # Maximum angle for L-shape (degrees)
+
+    # Get relevant landmarks for L-shape detection
+    thumb_tip = hand_landmarks.landmark[4]  # Thumb tip
+    thumb_base = hand_landmarks.landmark[2]  # Thumb IP joint
+    index_tip = hand_landmarks.landmark[8]  # Index finger tip
+    index_base = hand_landmarks.landmark[5]  # Index finger MCP
+
+    # Convert normalized coordinates to pixel values
+    thumb_tip_x = int(thumb_tip.x * frame_w)
+    thumb_tip_y = int(thumb_tip.y * frame_h)
+    thumb_base_x = int(thumb_base.x * frame_w)
+    thumb_base_y = int(thumb_base.y * frame_h)
+    index_tip_x = int(index_tip.x * frame_w)
+    index_tip_y = int(index_tip.y * frame_h)
+    index_base_x = int(index_base.x * frame_w)
+    index_base_y = int(index_base.y * frame_h)
+
+    # Calculate vectors for thumb and index finger
+    thumb_vector = (thumb_tip_x - thumb_base_x, thumb_tip_y - thumb_base_y)
+    index_vector = (index_tip_x - index_base_x, index_tip_y - index_base_y)
+
+    # Calculate lengths
+    thumb_length = math.sqrt(thumb_vector[0]**2 + thumb_vector[1]**2)
+    index_length = math.sqrt(index_vector[0]**2 + index_vector[1]**2)
+
+    # Check if lengths are within acceptable range
+    if not (min_l_shape_size <= thumb_length <= max_l_shape_size and
+            min_l_shape_size <= index_length <= max_l_shape_size):
+        return False, index_tip_y
+
+    # Calculate angle between vectors using dot product
+    dot_product = thumb_vector[0] * index_vector[0] + thumb_vector[1] * index_vector[1]
+    angle = math.degrees(math.acos(dot_product / (thumb_length * index_length)))
+
+    # Check if angle is within L-shape range
+    is_l_shape = l_shape_min_angle <= angle <= l_shape_max_angle
+
+    return is_l_shape, index_tip_y
 
 if __name__ == "__main__":
     main()
