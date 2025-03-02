@@ -333,6 +333,34 @@ def main():
 
                         cv2.circle(output_frame, point, size, color, -1)
 
+                # Now draw the transformed pinch visualizations
+                for landmark in transformed_landmarks:
+                    # Extract transformed coordinates
+                    thumb_point = landmark["thumb"]
+                    index_point = landmark["index"]
+                    pinch_point = landmark["pinch"]
+                    is_pinching = landmark["is_pinching"]
+                    hand_idx = landmark["hand_idx"]
+
+                    # Draw pinch visualization on the output frame
+                    pinch_color = (0, 255, 0) if is_pinching else (0, 0, 255)
+
+                    # Draw line between thumb and index finger
+                    cv2.line(output_frame, thumb_point, index_point, pinch_color, 2)
+
+                    # Draw circles at fingertips
+                    cv2.circle(output_frame, thumb_point, 8, (255, 0, 0), -1)
+                    cv2.circle(output_frame, index_point, 8, (0, 0, 255), -1)
+
+                    # Draw pinch point
+                    cv2.circle(output_frame, pinch_point, 12, pinch_color, -1 if is_pinching else 2)
+
+                    # Add pinch label
+                    pinch_status = "Pinched" if is_pinching else "Not Pinched"
+                    cv2.putText(output_frame, f"Hand {hand_idx+1}: {pinch_status}",
+                                (pinch_point[0] - 70, pinch_point[1] - 15),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, pinch_color, 2)
+
                 # Now check if we have two valid pinch gestures for zoom control
                 if len(pinch_points) == 2 and valid_pinches[0] and valid_pinches[1]:
                     two_hand_gesture_active = True
