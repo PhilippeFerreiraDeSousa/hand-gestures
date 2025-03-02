@@ -239,6 +239,11 @@ def start_streaming_server(host='0.0.0.0', port=8080):
         print(f"Error starting streaming server: {e}")
         print("The stream may not be accessible. Check your network settings.")
 
+USE_SMART_GLASSES = True
+# Set to 1 when using smart glasses, 2 when using webcam
+# FIXME: This can be fixed by getting world landmarks in meter instead of frame pixels.
+HAND_DEPTH = 1.5 if USE_SMART_GLASSES else 2
+
 def main():
     # Set up streaming server
     local_ip = get_local_ip()
@@ -290,8 +295,8 @@ def main():
     max_zoom = 3.0
     min_rotation = -45.0  # Limit rotation to ±45 degrees for usability
     max_rotation = 45.0
-    zoom_speed = 0.8 # Speed factor for zoom
-    rotation_speed = 2.0  # Speed factor for rotation
+    zoom_speed = 1.6 / HAND_DEPTH  # Speed factor for zoom
+    rotation_speed = 4.0 / HAND_DEPTH  # Speed factor for rotation
 
     # Two-hand gesture variables
     prev_hands_distance = None
@@ -349,7 +354,8 @@ def main():
             original_frame = frame.copy()
 
             # Flip the image horizontally for a more natural selfie-view display
-            original_frame = cv2.flip(original_frame, 1)
+            if not USE_SMART_GLASSES:
+                original_frame = cv2.flip(original_frame, 1)
 
             # Process the original frame with MediaPipe
             # MediaPipe expects RGB
@@ -438,7 +444,7 @@ def main():
 
                     # Check if this is a pinching gesture
                     # We'll consider it a pinch if thumb and index are close enough
-                    is_pinching = pinch_distance < 50  # Adjust threshold as needed
+                    is_pinching = pinch_distance < 100 / HAND_DEPTH  # Adjust threshold as needed
 
                     # Store the pinch point and validity
                     pinch_points.append(original_pinch_point)
