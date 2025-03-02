@@ -13,10 +13,12 @@ import time
 import numpy as np
 import math
 import threading
-from flask import Flask, Response
+from flask import Flask, Response, send_from_directory
 import socket
 import argparse
 import sys
+import os
+import json
 
 # Global variables for sharing frames with the streaming server
 global_output_frame = None
@@ -56,6 +58,9 @@ def index():
             button { padding: 8px 16px; margin: 0 10px; background-color: #4CAF50; color: white;
                      border: none; border-radius: 4px; cursor: pointer; }
             button:hover { background-color: #45a049; }
+            .flash { position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+                    background-color: white; opacity: 0; z-index: 1000; pointer-events: none;
+                    transition: opacity 0.1s ease-out; }
         </style>
     </head>
     <body>
@@ -76,7 +81,14 @@ def index():
             <p>1. Show both hands with thumb and index finger pinching</p>
             <p>2. Move hands apart/together to zoom in/out</p>
             <p>3. Rotate hands to rotate the view</p>
+            <p>4. Quickly bring pinched hands together to "take a photo" (plays camera sound)</p>
         </div>
+        <!-- White flash effect for camera -->
+        <div id="flash" class="flash"></div>
+        <!-- Camera shutter sound -->
+        <audio id="shutterSound">
+            <source src="/static/camera-shutter-sound.mp3" type="audio/mpeg">
+        </audio>
         <script>
             // Wait a moment before showing fallback options
             setTimeout(function() {
@@ -94,6 +106,49 @@ def index():
             function toggleFallback() {
                 window.location.href = "/simple_view";
             }
+
+            // Set up EventSource for server-sent events
+            let evtSource;
+
+            function setupEventSource() {
+                if (typeof(EventSource) !== "undefined") {
+                    evtSource = new EventSource("/photo_events");
+
+                    evtSource.onmessage = function(event) {
+                        const data = JSON.parse(event.data);
+                        if (data.action === "take_photo") {
+                            playShutterSound();
+                        }
+                    };
+
+                    evtSource.onerror = function() {
+                        // Connection error or closed
+                        evtSource.close();
+                        // Try to reconnect after 5 seconds
+                        setTimeout(setupEventSource, 5000);
+                    };
+                } else {
+                    console.log("Your browser doesn't support server-sent events");
+                }
+            }
+
+            function playShutterSound() {
+                const sound = document.getElementById('shutterSound');
+                const flash = document.getElementById('flash');
+
+                // Play sound
+                sound.currentTime = 0;
+                sound.play();
+
+                // Create flash effect
+                flash.style.opacity = 0.7;
+                setTimeout(() => {
+                    flash.style.opacity = 0;
+                }, 100);
+            }
+
+            // Initialize event source connection
+            setupEventSource();
         </script>
     </body>
     </html>
@@ -185,6 +240,9 @@ def simple_view():
             img { width: 100%; height: auto; max-width: 800px; }
             .info { margin: 20px; padding: 10px; background: #fff; border-radius: 5px; }
             button { padding: 10px 20px; margin: 10px; cursor: pointer; }
+            .flash { position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+                    background-color: white; opacity: 0; z-index: 1000; pointer-events: none;
+                    transition: opacity 0.1s ease-out; }
         </style>
         <script>
             function refreshImage() {
@@ -195,6 +253,49 @@ def simple_view():
 
             // Auto-refresh every 500ms
             setInterval(refreshImage, 500);
+
+            // Set up EventSource for server-sent events
+            let evtSource;
+
+            function setupEventSource() {
+                if (typeof(EventSource) !== "undefined") {
+                    evtSource = new EventSource("/photo_events");
+
+                    evtSource.onmessage = function(event) {
+                        const data = JSON.parse(event.data);
+                        if (data.action === "take_photo") {
+                            playShutterSound();
+                        }
+                    };
+
+                    evtSource.onerror = function() {
+                        // Connection error or closed
+                        evtSource.close();
+                        // Try to reconnect after 5 seconds
+                        setTimeout(setupEventSource, 5000);
+                    };
+                } else {
+                    console.log("Your browser doesn't support server-sent events");
+                }
+            }
+
+            function playShutterSound() {
+                const sound = document.getElementById('shutterSound');
+                const flash = document.getElementById('flash');
+
+                // Play sound
+                sound.currentTime = 0;
+                sound.play();
+
+                // Create flash effect
+                flash.style.opacity = 0.7;
+                setTimeout(() => {
+                    flash.style.opacity = 0;
+                }, 100);
+            }
+
+            // Initialize event source connection
+            setupEventSource();
         </script>
     </head>
     <body>
@@ -211,7 +312,14 @@ def simple_view():
             <p>1. Show both hands with thumb and index finger pinching</p>
             <p>2. Move hands apart/together to zoom in/out</p>
             <p>3. Rotate hands to rotate the view</p>
+            <p>4. Quickly bring pinched hands together to "take a photo" (plays camera sound)</p>
         </div>
+        <!-- White flash effect for camera -->
+        <div id="flash" class="flash"></div>
+        <!-- Camera shutter sound -->
+        <audio id="shutterSound">
+            <source src="/static/camera-shutter-sound.mp3" type="audio/mpeg">
+        </audio>
     </body>
     </html>
     """
@@ -243,11 +351,6 @@ def start_streaming_server(host='0.0.0.0', port=8080):
     except Exception as e:
         print(f"Error starting streaming server: {e}")
         print("The stream may not be accessible. Check your network settings.")
-
-USE_SMART_GLASSES = True
-# Set to 1 when using smart glasses, 2 when using webcam
-# FIXME: This can be fixed by getting world landmarks in meter instead of frame pixels.
-HAND_DEPTH = 1.5 if USE_SMART_GLASSES else 2
 
 def main():
     # Parse command line arguments
@@ -286,6 +389,7 @@ def main():
 
         # For RTMP streams, we don't need the AVFoundation backend
         cap = cv2.VideoCapture(rtmp_url)
+        USE_SMART_GLASSES = True
 
         # Wait a bit to verify connection
         time.sleep(2)
@@ -312,11 +416,16 @@ def main():
             backend = cv2.CAP_ANY
 
         cap = cv2.VideoCapture(option, backend)
+        USE_SMART_GLASSES = False
 
     # Verify capture was successfully initialized
     if not cap.isOpened():
         print("Error: Could not open video source. Exiting.")
         return
+
+    # Set to 1 when using smart glasses, 2 when using webcam
+    # FIXME: This can be fixed by getting world landmarks in meter instead of frame pixels.
+    HAND_DEPTH = 1.5 if USE_SMART_GLASSES else 2
 
     # Check what resolution we actually got
     actual_width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
@@ -325,8 +434,6 @@ def main():
 
     # Initialize MediaPipe Hands with lightweight settings to improve performance
     mp_hands = mp.solutions.hands
-    mp_drawing = mp.solutions.drawing_utils
-    mp_drawing_styles = mp.solutions.drawing_styles
 
     # Initialize the hand detection model
     hands = mp_hands.Hands(
@@ -357,6 +464,15 @@ def main():
     zoom_smoothing = 0.2  # Lower value = smoother zoom but less responsive
     rotation_smoothing = 0.15  # Smoother rotation
     two_hand_gesture_active = False
+
+    # Photo gesture variables
+    photo_gesture_cooldown = 0  # Cooldown timer to prevent multiple rapid triggers
+    photo_cooldown_frames = 15  # Number of frames to wait before allowing another photo
+    photo_distance_threshold = 150  # Distance threshold for photo gesture (hands close together)
+    photo_distance_change_threshold = 200  # How quickly hands must come together
+    recent_distances = []  # Store recent hand distances for velocity calculation
+    recent_distances_max_len = 5  # How many recent distances to keep
+    last_photo_time = 0  # Time when the last photo was taken
 
     # For on-screen display of control
     zoom_rect_size = 100
@@ -773,6 +889,59 @@ def main():
                             # Clamp to min/max range
                             rotation_angle = max(min_rotation, min(max_rotation, rotation_angle))
 
+                        # Check for photo-taking gesture (rapid hands coming together)
+                        # Add current distance to recent distances list
+                        recent_distances.append(hands_distance)
+                        if len(recent_distances) > recent_distances_max_len:
+                            recent_distances.pop(0)  # Remove oldest distance
+
+                        # If we have enough data and not in cooldown
+                        if len(recent_distances) >= 3 and photo_gesture_cooldown == 0:
+                            # Calculate rate of change of distance (how quickly hands are moving)
+                            distance_velocity = recent_distances[0] - recent_distances[-1]
+
+                            # Check if hands are coming together quickly and are close enough
+                            current_time = time.time()
+                            if (distance_velocity > photo_distance_change_threshold and
+                                hands_distance < photo_distance_threshold and
+                                current_time - last_photo_time > 1.0):  # At least 1 second between photos
+
+                                # Photo gesture detected!
+                                print(f"Photo gesture detected! Distance velocity: {distance_velocity:.1f}")
+
+                                # Take a photo (save the current frame)
+                                photo_filename = f"photo_{time.strftime('%Y%m%d_%H%M%S')}.jpg"
+                                cv2.imwrite(os.path.join('static', photo_filename), original_frame)
+                                print(f"Photo saved as {photo_filename}")
+
+                                # Notify web clients to play sound and show flash
+                                notify_clients_photo_taken()
+
+                                # Start cooldown period to prevent multiple triggers
+                                photo_gesture_cooldown = photo_cooldown_frames
+                                last_photo_time = current_time
+
+                        # Add photo gesture status display
+                        if photo_gesture_cooldown > 0:
+                            status_text = "Photo taken!"
+                            status_color = (0, 255, 255)
+                            photo_gesture_cooldown -= 1
+                        elif len(recent_distances) >= 3:
+                            distance_velocity = recent_distances[0] - recent_distances[-1]
+                            if distance_velocity > photo_distance_change_threshold / 2:
+                                status_text = "Ready for photo!"
+                                status_color = (0, 255, 0)
+                            else:
+                                status_text = "Move hands together quickly for photo"
+                                status_color = (200, 200, 200)
+                        else:
+                            status_text = "Move hands together quickly for photo"
+                            status_color = (200, 200, 200)
+
+                        cv2.putText(output_frame, status_text,
+                                    (midpoint_x - 110, midpoint_y + 50),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
+
                     # Update previous values
                     prev_hands_distance = hands_distance
                     prev_hands_angle = current_angle
@@ -783,6 +952,7 @@ def main():
                         prev_hands_distance = None
                     if prev_hands_angle is not None:
                         prev_hands_angle = None
+                    recent_distances = []  # Clear recent distances when not in gesture
 
             # Display zoom and rotation levels
             zoom_text = f"Zoom: {zoom_scale:.2f}x"
@@ -895,6 +1065,55 @@ def set_camera_resolution(cap, camera_width, camera_height):
     # This helps with bandwidth issues
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, camera_width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_height)
+
+# Create static folder for sound files if it doesn't exist
+os.makedirs('static', exist_ok=True)
+
+# Add server-sent events route for photo events
+@app.route('/photo_events')
+def photo_events():
+    def event_stream():
+        # Initial empty message to establish connection
+        yield "data: {}\n\n"
+
+        # Add this client to a queue that will receive photo events
+        photo_event_queue = []
+        with global_photo_clients_lock:
+            global_photo_clients.append(photo_event_queue)
+
+        try:
+            # Keep the connection open and check for events
+            while True:
+                # If there are events in the queue, send them
+                if photo_event_queue:
+                    event = photo_event_queue.pop(0)
+                    yield f"data: {event}\n\n"
+
+                # Sleep to prevent high CPU usage
+                time.sleep(0.1)
+        except GeneratorExit:
+            # Remove this client when connection is closed
+            with global_photo_clients_lock:
+                if photo_event_queue in global_photo_clients:
+                    global_photo_clients.remove(photo_event_queue)
+
+    return Response(event_stream(), mimetype="text/event-stream")
+
+# Add route to serve static files
+@app.route('/static/<path:filename>')
+def serve_static(filename):
+    return send_from_directory('static', filename)
+
+# Variables to track photo gesture and clients
+global_photo_clients = []
+global_photo_clients_lock = threading.Lock()
+
+def notify_clients_photo_taken():
+    """Send a message to all connected clients that a photo was taken"""
+    event_data = json.dumps({"action": "take_photo", "timestamp": time.time()})
+    with global_photo_clients_lock:
+        for client_queue in global_photo_clients:
+            client_queue.append(event_data)
 
 if __name__ == "__main__":
     main()
