@@ -16,9 +16,6 @@ def main():
     backend = cv2.CAP_AVFOUNDATION
     cap = cv2.VideoCapture(option, backend)
 
-    # Try lower resolution first for better performance with multiple USB devices
-    # set_camera_resolution(cap, 320, 240)
-
     # Check what resolution we actually got
     actual_width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
     actual_height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
@@ -104,19 +101,40 @@ def main():
             # Get original frame dimensions
             frame_h, frame_w = frame.shape[:2]
 
-            # Step 1: Apply rotation if needed
+            # Store the original frame for hand detection
+            original_frame = frame.copy()
+
+            # Flip the image horizontally for a more natural selfie-view display
+            original_frame = cv2.flip(original_frame, 1)
+
+            # Process the original frame with MediaPipe
+            # MediaPipe expects RGB
+            rgb_frame = cv2.cvtColor(original_frame, cv2.COLOR_BGR2RGB)
+
+            # To improve performance, mark the image as not writeable
+            rgb_frame.flags.writeable = False
+
+            # Process the frame with MediaPipe Hands
+            results = hands.process(rgb_frame)
+
+            # Mark the image as writeable again for drawing
+            rgb_frame.flags.writeable = True
+
+            # Now create the display frame with transformations
+            display_frame = original_frame.copy()
+
+            # Apply rotation and zoom to the display frame (not affecting hand detection)
             if abs(rotation_angle) > 0.1:  # Only apply rotation if significant
                 # Calculate rotation matrix
                 center = (frame_w // 2, frame_h // 2)
                 rotation_matrix = cv2.getRotationMatrix2D(center, rotation_angle, 1.0)
 
                 # Apply rotation with border handling (black borders)
-                frame = cv2.warpAffine(frame, rotation_matrix, (frame_w, frame_h),
-                                      flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT,
-                                      borderValue=(0, 0, 0))
+                display_frame = cv2.warpAffine(display_frame, rotation_matrix, (frame_w, frame_h),
+                                           flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT,
+                                           borderValue=(0, 0, 0))
 
-            # Process current frame for transformation (zoom and rotation)
-            # Step 2: Apply zoom (center crop and resize)
+            # Apply zoom (center crop and resize)
             if zoom_scale > 1.0:
                 # Calculate the region to crop based on zoom level
                 crop_w = int(frame_w / zoom_scale)
@@ -129,28 +147,13 @@ def main():
                 y2 = y1 + crop_h
 
                 # Crop the frame to the calculated region
-                zoomed_frame = frame[y1:y2, x1:x2]
+                zoomed_frame = display_frame[y1:y2, x1:x2]
 
                 # Resize back to original size
-                frame = cv2.resize(zoomed_frame, (frame_w, frame_h), interpolation=cv2.INTER_LINEAR)
+                display_frame = cv2.resize(zoomed_frame, (frame_w, frame_h), interpolation=cv2.INTER_LINEAR)
 
-            # Flip the image horizontally for a more natural selfie-view display
-            frame = cv2.flip(frame, 1)
-
-            # MediaPipe expects RGB
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-            # To improve performance, mark the image as not writeable
-            rgb_frame.flags.writeable = False
-
-            # Process the frame with MediaPipe Hands
-            results = hands.process(rgb_frame)
-
-            # Mark the image as writeable again for drawing
-            rgb_frame.flags.writeable = True
-
-            # Create output frame
-            output_frame = frame.copy()
+            # Create output frame for display
+            output_frame = display_frame.copy()
 
             # Reset gesture active flag
             two_hand_gesture_active = False
@@ -159,25 +162,22 @@ def main():
             pinch_points = []
             valid_pinches = []
 
+            # Storage for transformed coordinates
+            transformed_landmarks = []
+
             # Check if hand landmarks are detected
             if results.multi_hand_landmarks:
                 # First, process all hands to detect pinch gestures
                 for hand_idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
-                    # Draw the hand landmarks and connections
-                    mp_drawing.draw_landmarks(
-                        output_frame,
-                        hand_landmarks,
-                        mp_hands.HAND_CONNECTIONS,
-                        mp_drawing_styles.get_default_hand_landmarks_style(),
-                        mp_drawing_styles.get_default_hand_connections_style()
-                    )
+                    # Get pixel coordinates from original frame
+                    h, w, c = original_frame.shape
+                    hand_points = []
 
                     # Extract thumb and index finger landmarks for pinch gesture detection
                     thumb_tip = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_TIP]
                     index_tip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
 
                     # Get pixel coordinates
-                    h, w, c = output_frame.shape
                     thumb_x, thumb_y = int(thumb_tip.x * w), int(thumb_tip.y * h)
                     index_x, index_y = int(index_tip.x * w), int(index_tip.y * h)
 
@@ -189,51 +189,174 @@ def main():
                     pinch_y = (thumb_y + index_y) // 2
                     pinch_point = (pinch_x, pinch_y)
 
+                    # Store the original pinch point for gesture calculations
+                    original_pinch_point = pinch_point
+
                     # Check if this is a pinching gesture
                     # We'll consider it a pinch if thumb and index are close enough
                     is_pinching = pinch_distance < 50  # Adjust threshold as needed
 
                     # Store the pinch point and validity
-                    pinch_points.append(pinch_point)
+                    pinch_points.append(original_pinch_point)
                     valid_pinches.append(is_pinching)
 
-                    # Draw pinch visualization
-                    pinch_color = (0, 255, 0) if is_pinching else (0, 0, 255)
-                    # Draw line between thumb and index finger
-                    cv2.line(output_frame, (thumb_x, thumb_y), (index_x, index_y), pinch_color, 2)
-                    # Draw circles at fingertips
-                    cv2.circle(output_frame, (thumb_x, thumb_y), 8, (255, 0, 0), -1)
-                    cv2.circle(output_frame, (index_x, index_y), 8, (0, 0, 255), -1)
-                    # Draw pinch point
-                    cv2.circle(output_frame, pinch_point, 12, pinch_color, -1 if is_pinching else 2)
+                    # Transform coordinates to match display transformations
+                    # We need to transform in reverse order: first zoom, then rotate
 
-                    # Add pinch label
-                    pinch_status = "Pinched" if is_pinching else "Not Pinched"
-                    cv2.putText(output_frame, f"Hand {hand_idx+1}: {pinch_status}",
-                                (pinch_x - 70, pinch_y - 15),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, pinch_color, 2)
+                    # Transform: Apply zoom transformation to coordinates
+                    transformed_thumb_x, transformed_thumb_y = thumb_x, thumb_y
+                    transformed_index_x, transformed_index_y = index_x, index_y
+                    transformed_pinch_x, transformed_pinch_y = pinch_x, pinch_y
+
+                    if zoom_scale > 1.0:
+                        # Calculate zoom transformation for coordinates
+                        center_x, center_y = frame_w // 2, frame_h // 2
+                        # Scale coordinates from center
+                        transformed_thumb_x = int(center_x + (thumb_x - center_x) * zoom_scale)
+                        transformed_thumb_y = int(center_y + (thumb_y - center_y) * zoom_scale)
+                        transformed_index_x = int(center_x + (index_x - center_x) * zoom_scale)
+                        transformed_index_y = int(center_y + (index_y - center_y) * zoom_scale)
+                        transformed_pinch_x = int(center_x + (pinch_x - center_x) * zoom_scale)
+                        transformed_pinch_y = int(center_y + (pinch_y - center_y) * zoom_scale)
+
+                    # Transform: Apply rotation to coordinates if needed
+                    if abs(rotation_angle) > 0.1:
+                        # We need to apply the inverse rotation to the coordinates
+                        # since we're transforming from original to rotated space
+                        inverse_angle = -rotation_angle
+                        center = (frame_w // 2, frame_h // 2)
+
+                        # Rotation formulas
+                        cos_angle = math.cos(math.radians(inverse_angle))
+                        sin_angle = math.sin(math.radians(inverse_angle))
+
+                        # Apply rotation to thumb coordinates
+                        thumb_dx = transformed_thumb_x - center[0]
+                        thumb_dy = transformed_thumb_y - center[1]
+                        transformed_thumb_x = int(center[0] + thumb_dx * cos_angle - thumb_dy * sin_angle)
+                        transformed_thumb_y = int(center[1] + thumb_dx * sin_angle + thumb_dy * cos_angle)
+
+                        # Apply rotation to index coordinates
+                        index_dx = transformed_index_x - center[0]
+                        index_dy = transformed_index_y - center[1]
+                        transformed_index_x = int(center[0] + index_dx * cos_angle - index_dy * sin_angle)
+                        transformed_index_y = int(center[1] + index_dx * sin_angle + index_dy * cos_angle)
+
+                        # Apply rotation to pinch point
+                        pinch_dx = transformed_pinch_x - center[0]
+                        pinch_dy = transformed_pinch_y - center[1]
+                        transformed_pinch_x = int(center[0] + pinch_dx * cos_angle - pinch_dy * sin_angle)
+                        transformed_pinch_y = int(center[1] + pinch_dx * sin_angle + pinch_dy * cos_angle)
+
+                    # Use transformed coordinates for drawing
+                    transformed_pinch_point = (transformed_pinch_x, transformed_pinch_y)
+
+                    # Create a transformed version of hand_landmarks for drawing
+                    transformed_landmark = {"hand_idx": hand_idx,
+                                           "thumb": (transformed_thumb_x, transformed_thumb_y),
+                                           "index": (transformed_index_x, transformed_index_y),
+                                           "pinch": transformed_pinch_point,
+                                           "is_pinching": is_pinching}
+                    transformed_landmarks.append(transformed_landmark)
+
+                    # Transform all landmarks for this hand and store them
+                    transformed_landmark_points = []
+                    for landmark in hand_landmarks.landmark:
+                        # Get pixel coordinates
+                        lm_x, lm_y = int(landmark.x * w), int(landmark.y * h)
+
+                        # Apply zoom transformation
+                        transformed_lm_x, transformed_lm_y = lm_x, lm_y
+                        if zoom_scale > 1.0:
+                            # Scale coordinates from center
+                            center_x, center_y = frame_w // 2, frame_h // 2
+                            transformed_lm_x = int(center_x + (lm_x - center_x) * zoom_scale)
+                            transformed_lm_y = int(center_y + (lm_y - center_y) * zoom_scale)
+
+                        # Apply rotation transformation
+                        if abs(rotation_angle) > 0.1:
+                            inverse_angle = -rotation_angle
+                            center = (frame_w // 2, frame_h // 2)
+
+                            # Rotation formulas
+                            cos_angle = math.cos(math.radians(inverse_angle))
+                            sin_angle = math.sin(math.radians(inverse_angle))
+
+                            # Apply rotation to landmark coordinates
+                            lm_dx = transformed_lm_x - center[0]
+                            lm_dy = transformed_lm_y - center[1]
+                            transformed_lm_x = int(center[0] + lm_dx * cos_angle - lm_dy * sin_angle)
+                            transformed_lm_y = int(center[1] + lm_dx * sin_angle + lm_dy * cos_angle)
+
+                        transformed_landmark_points.append((transformed_lm_x, transformed_lm_y))
+
+                    # Add the full set of transformed landmark points to our record
+                    transformed_landmark["landmarks"] = transformed_landmark_points
+
+                # Now draw all hand landmarks with the correct transformations
+                # Define hand connections for manual drawing
+                HAND_CONNECTIONS = [
+                    (0, 1), (1, 2), (2, 3), (3, 4),         # thumb
+                    (0, 5), (5, 6), (6, 7), (7, 8),         # index finger
+                    (0, 9), (9, 10), (10, 11), (11, 12),    # middle finger
+                    (0, 13), (13, 14), (14, 15), (15, 16),  # ring finger
+                    (0, 17), (17, 18), (18, 19), (19, 20),  # pinky
+                    (5, 9), (9, 13), (13, 17),              # palm connections
+                    (0, 17), (5, 0)                         # wrist connections
+                ]
+
+                # Draw all transformed hand landmarks and connections
+                for landmark_data in transformed_landmarks:
+                    landmark_points = landmark_data["landmarks"]
+
+                    # Draw all connections (lines between landmarks)
+                    for connection in HAND_CONNECTIONS:
+                        start_idx, end_idx = connection
+                        if start_idx < len(landmark_points) and end_idx < len(landmark_points):
+                            cv2.line(output_frame,
+                                    landmark_points[start_idx],
+                                    landmark_points[end_idx],
+                                    (255, 255, 255), 2)
+
+                    # Draw all landmark points
+                    for i, point in enumerate(landmark_points):
+                        # Different colors for different landmark types
+                        if i == 0:  # Wrist
+                            color = (255, 0, 0)
+                            size = 5
+                        elif i in [4, 8, 12, 16, 20]:  # Fingertips
+                            color = (0, 255, 0)
+                            size = 5
+                        else:  # Other joints
+                            color = (0, 0, 255)
+                            size = 3
+
+                        cv2.circle(output_frame, point, size, color, -1)
 
                 # Now check if we have two valid pinch gestures for zoom control
                 if len(pinch_points) == 2 and valid_pinches[0] and valid_pinches[1]:
                     two_hand_gesture_active = True
 
-                    # Calculate distance between the two pinch points
+                    # Calculate distance between the two pinch points using ORIGINAL pinch points
                     hands_distance = math.sqrt(
                         (pinch_points[0][0] - pinch_points[1][0])**2 +
                         (pinch_points[0][1] - pinch_points[1][1])**2
                     )
 
-                    # Calculate angle between the two pinch points
+                    # Calculate angle between the two pinch points using ORIGINAL pinch points
                     dx = pinch_points[1][0] - pinch_points[0][0]
                     dy = pinch_points[1][1] - pinch_points[0][1]
                     current_angle = math.degrees(math.atan2(dy, dx))
 
-                    # Draw connection line between pinch points
-                    cv2.line(output_frame, pinch_points[0], pinch_points[1], (255, 255, 0), 2)
+                    # Draw connection line between transformed pinch points
+                    cv2.line(output_frame,
+                            transformed_landmarks[0]["pinch"],
+                            transformed_landmarks[1]["pinch"],
+                            (255, 255, 0), 2)
 
-                    # Display the distance and angle
-                    midpoint_x = (pinch_points[0][0] + pinch_points[1][0]) // 2
-                    midpoint_y = (pinch_points[0][1] + pinch_points[1][1]) // 2
+                    # Display the distance and angle (calculate midpoint of transformed points)
+                    midpoint_x = (transformed_landmarks[0]["pinch"][0] + transformed_landmarks[1]["pinch"][0]) // 2
+                    midpoint_y = (transformed_landmarks[0]["pinch"][1] + transformed_landmarks[1]["pinch"][1]) // 2
 
                     distance_text = f"Distance: {hands_distance:.0f}px"
                     cv2.putText(output_frame, distance_text,
@@ -380,9 +503,6 @@ def main():
     hands.close()
 
 def set_camera_resolution(cap, camera_width, camera_height):
-    camera_width = 320
-    camera_height = 240
-
     # Try to set camera properties
     original_width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
     original_height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
