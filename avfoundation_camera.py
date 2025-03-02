@@ -109,7 +109,7 @@ def index():
             <p>1. Show both hands with thumb and index finger pinching</p>
             <p>2. Move hands apart/together to zoom in/out</p>
             <p>3. Rotate hands to rotate the view</p>
-            <p>4. <strong>Snap your fingers</strong> to take a photo (plays camera sound)</p>
+            <p>4. Quickly bring pinched hands together to "take a photo" (plays camera sound)</p>
         </div>
         <!-- White flash effect for camera -->
         <div id="flash" class="flash"></div>
@@ -612,7 +612,7 @@ def simple_view():
             <p>1. Show both hands with thumb and index finger pinching</p>
             <p>2. Move hands apart/together to zoom in/out</p>
             <p>3. Rotate hands to rotate the view</p>
-            <p>4. <strong>Snap your fingers</strong> to take a photo (plays camera sound)</p>
+            <p>4. Quickly bring pinched hands together to "take a photo" (plays camera sound)</p>
         </div>
         <!-- White flash effect for camera -->
         <div id="flash" class="flash"></div>
@@ -765,23 +765,7 @@ def main():
     rotation_smoothing = 0.15  # Smoother rotation
     two_hand_gesture_active = False
 
-    # Finger snap gesture variables
-    prev_finger_distances = {}  # Dictionary to track previous finger distances for each hand
-    finger_velocity_threshold = 20  # Threshold for quick finger movement (snap)
-    min_finger_distance = 15  # Minimum distance to consider fingers apart
-    max_finger_distance = 30  # Maximum distance during snap
-    snap_cooldown_frames = 15  # Number of frames to wait before allowing another snap
-    snap_cooldown = 0  # Current cooldown counter
-    last_snap_time = 0  # Time of last detected snap
-    snap_buffer = []  # Buffer to detect rapid finger movements
-    snap_buffer_size = 5  # Size of the buffer
-    snap_finger_pairs = [
-        # Pairs of finger landmarks to check for snapping
-        (mp_hands.HandLandmark.THUMB_TIP, mp_hands.HandLandmark.MIDDLE_FINGER_TIP),  # Thumb and middle finger
-        (mp_hands.HandLandmark.THUMB_TIP, mp_hands.HandLandmark.INDEX_FINGER_TIP),   # Thumb and index finger
-    ]
-
-    # Photo gesture variables (for backwards compatibility)
+    # Photo gesture variables
     photo_gesture_cooldown = 0  # Cooldown timer to prevent multiple rapid triggers
     photo_cooldown_frames = 15  # Number of frames to wait before allowing another photo
     photo_distance_threshold = 150  # Distance threshold for photo gesture (hands close together)
@@ -795,13 +779,12 @@ def main():
     rotation_arc_radius = 50
 
     print("Starting video stream. Press 'q' to quit.")
-    print("\nHand Gesture Instructions:")
+    print("\nTwo-Hand Gesture Instructions:")
     print("1. Show both hands with thumb and index finger pinching")
     print("2. Move hands diagonally apart from each other to zoom in")
     print("3. Move hands closer together to zoom out")
     print("4. Rotate your hands to rotate the view")
-    print("5. Snap your fingers to take a photo")
-    print("6. Press 'r' to reset zoom and rotation")
+    print("5. Press 'r' to reset zoom and rotation")
 
     # Variables to track frame stability
     consecutive_failures = 0
@@ -955,110 +938,13 @@ def main():
                     # Extract thumb and index finger landmarks for pinch gesture detection
                     thumb_tip = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_TIP]
                     index_tip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
-                    middle_tip = hand_landmarks.landmark[mp_hands.HandLandmark.MIDDLE_FINGER_TIP]
 
                     # Get pixel coordinates
                     thumb_x, thumb_y = int(thumb_tip.x * w), int(thumb_tip.y * h)
                     index_x, index_y = int(index_tip.x * w), int(index_tip.y * h)
-                    middle_x, middle_y = int(middle_tip.x * w), int(middle_tip.y * h)
 
                     # Calculate distance between thumb and index finger (pinch gesture)
                     pinch_distance = math.sqrt((thumb_x - index_x)**2 + (thumb_y - index_y)**2)
-
-                    # Calculate distances for finger snap detection
-                    try:
-                        snap_distances = {}
-                        for pair_idx, (first_landmark, second_landmark) in enumerate(snap_finger_pairs):
-                            first_point = hand_landmarks.landmark[first_landmark]
-                            second_point = hand_landmarks.landmark[second_landmark]
-
-                            first_x, first_y = int(first_point.x * w), int(first_point.y * h)
-                            second_x, second_y = int(second_point.x * w), int(second_point.y * h)
-
-                            distance = math.sqrt((first_x - second_x)**2 + (first_y - second_y)**2)
-                            pair_key = f"hand_{hand_idx}_pair_{pair_idx}"
-                            snap_distances[pair_key] = distance
-
-                            # Check for finger snap gesture
-                            if snap_cooldown == 0 and hand_idx == 0:  # Only detect snaps on the first hand
-                                # Look for the pattern of fingers moving closer rapidly
-                                if pair_key in prev_finger_distances:
-                                    # Calculate velocity (positive means fingers are coming together)
-                                    velocity = prev_finger_distances[pair_key] - distance
-
-                                    # Make sure we have a snap_buffer to work with
-                                    if not any(buf["pair_key"] == pair_key for buf in snap_buffer):
-                                        snap_buffer.append({
-                                            "pair_key": pair_key,
-                                            "velocities": [],
-                                            "distances": []
-                                        })
-
-                                    # Find the buffer for this finger pair
-                                    buffer = next((buf for buf in snap_buffer if buf["pair_key"] == pair_key), None)
-                                    if buffer:
-                                        buffer["velocities"].append(velocity)
-                                        buffer["distances"].append(distance)
-
-                                        # Keep buffer at the right size
-                                        if len(buffer["velocities"]) > snap_buffer_size:
-                                            buffer["velocities"].pop(0)
-                                            buffer["distances"].pop(0)
-
-                                        # Detect snap pattern: quick closing followed by small distance
-                                        if len(buffer["velocities"]) >= 3:
-                                            # Check for a sequence of increasing positive velocity (fingers coming together quickly)
-                                            # followed by a small enough distance
-                                            if (max(buffer["velocities"]) > finger_velocity_threshold and
-                                                min(buffer["distances"]) < max_finger_distance and
-                                                buffer["distances"][-1] < buffer["distances"][0] * 0.5):  # Significant closing
-
-                                                current_time = time.time()
-                                                # Ensure we don't trigger too frequently
-                                                if current_time - last_snap_time > 1.0:
-                                                    print(f"Finger snap detected! Velocity: {max(buffer['velocities']):.1f}")
-
-                                                    # Create timestamp for filenames
-                                                    timestamp = time.strftime('%Y%m%d_%H%M%S')
-
-                                                    # Check if we need to create a static directory
-                                                    if not os.path.exists('static'):
-                                                        os.makedirs('static')
-                                                        print("Created static directory for storing photos and sounds")
-
-                                                    # Save the transformed frame (with zoom and rotation)
-                                                    transformed_filename = f"photo_{timestamp}_transformed.jpg"
-                                                    cv2.imwrite(os.path.join('static', transformed_filename), output_frame)
-
-                                                    # Also save the original frame for reference
-                                                    original_filename = f"photo_{timestamp}_original.jpg"
-                                                    cv2.imwrite(os.path.join('static', original_filename), original_frame)
-
-                                                    print(f"Photos saved as:")
-                                                    print(f"  - {transformed_filename} (with zoom: {zoom_scale:.2f}x, rotation: {rotation_angle:.1f}°)")
-                                                    print(f"  - {original_filename} (original frame)")
-
-                                                    # Store the filename for access in web interface
-                                                    latest_photo = transformed_filename
-
-                                                    # Notify web clients to play sound and show flash
-                                                    notify_clients_photo_taken(transformed_filename)
-
-                                                    # Start cooldown period to prevent multiple triggers
-                                                    snap_cooldown = snap_cooldown_frames
-                                                    last_snap_time = current_time
-
-                                                    # Clear all buffers after successful detection
-                                                    snap_buffer.clear()
-
-                            # Update previous distances for next frame
-                            prev_finger_distances[pair_key] = distance
-                    except Exception as e:
-                        # Log the error but continue processing
-                        print(f"Error in finger snap detection: {e}")
-                        # Make sure we don't leave prev_finger_distances in an inconsistent state
-                        if 'pair_key' in locals() and 'distance' in locals():
-                            prev_finger_distances[pair_key] = distance
 
                     # Calculate pinch point (midpoint between thumb and index)
                     pinch_x = (thumb_x + index_x) // 2
@@ -1228,50 +1114,14 @@ def main():
                     cv2.circle(output_frame, thumb_point, 8, (255, 0, 0), -1)
                     cv2.circle(output_frame, index_point, 8, (0, 0, 255), -1)
 
-                    # Add visualization for snap gesture
-                    if hand_idx == 0:  # Only for the first hand
-                        # Draw middle finger tip
-                        middle_point = (transformed_landmarks[hand_idx]["landmarks"][mp_hands.HandLandmark.MIDDLE_FINGER_TIP.value])
-                        cv2.circle(output_frame, middle_point, 8, (0, 255, 0), -1)
-
-                        # Draw line from thumb to middle finger to visualize the snap measure
-                        thumb_point = transformed_landmarks[hand_idx]["landmarks"][mp_hands.HandLandmark.THUMB_TIP.value]
-                        cv2.line(output_frame, thumb_point, middle_point,
-                                (255, 255, 0) if snap_cooldown > 0 else (100, 100, 255), 2)
-
-                        # Display snap progress if we have data in the buffer
-                        if snap_buffer and len(snap_buffer) > 0 and len(snap_buffer[0]["velocities"]) > 0:
-                            # Find maximum velocity
-                            max_vel = max([max(buf["velocities"]) if buf["velocities"] else 0 for buf in snap_buffer])
-                            vel_ratio = min(1.0, max_vel / finger_velocity_threshold)
-
-                            # Draw velocity indicator
-                            indicator_width = 100
-                            indicator_x = middle_point[0] - indicator_width // 2
-                            indicator_y = middle_point[1] - 30
-
-                            # Background bar
-                            cv2.rectangle(output_frame,
-                                         (indicator_x, indicator_y),
-                                         (indicator_x + indicator_width, indicator_y + 10),
-                                         (100, 100, 100), -1)
-
-                            # Filled progress bar
-                            filled_width = int(indicator_width * vel_ratio)
-                            color = (0, int(255 * vel_ratio), int(255 * (1-vel_ratio)))
-                            cv2.rectangle(output_frame,
-                                         (indicator_x, indicator_y),
-                                         (indicator_x + filled_width, indicator_y + 10),
-                                         color, -1)
-
-                            # Show "Ready" text when close to threshold
-                            if vel_ratio > 0.7:
-                                cv2.putText(output_frame, "Ready!",
-                                           (indicator_x + indicator_width + 10, indicator_y + 10),
-                                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-
                     # Draw pinch point
                     cv2.circle(output_frame, pinch_point, 12, pinch_color, -1 if is_pinching else 2)
+
+                    # Add pinch label
+                    pinch_status = "Pinched" if is_pinching else "Not Pinched"
+                    cv2.putText(output_frame, f"Hand {hand_idx+1}: {pinch_status}",
+                                (pinch_point[0] - 70, pinch_point[1] - 15),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, pinch_color, 2)
 
                 # Now check if we have two valid pinch gestures for zoom control
                 if len(pinch_points) == 2 and valid_pinches[0] and valid_pinches[1]:
@@ -1358,33 +1208,33 @@ def main():
 
                                 # Photo gesture detected!
                                 print(f"Photo gesture detected! Distance velocity: {distance_velocity:.1f}")
-
+                                
                                 # Create timestamp for filenames
                                 timestamp = time.strftime('%Y%m%d_%H%M%S')
-
+                                
                                 # Check if we need to create a static directory
                                 if not os.path.exists('static'):
                                     os.makedirs('static')
                                     print("Created static directory for storing photos and sounds")
-
+                                
                                 # Save the transformed frame (with zoom and rotation)
                                 transformed_filename = f"photo_{timestamp}_transformed.jpg"
                                 cv2.imwrite(os.path.join('static', transformed_filename), output_frame)
-
+                                
                                 # Also save the original frame for reference
                                 original_filename = f"photo_{timestamp}_original.jpg"
                                 cv2.imwrite(os.path.join('static', original_filename), original_frame)
-
+                                
                                 print(f"Photos saved as:")
                                 print(f"  - {transformed_filename} (with zoom: {zoom_scale:.2f}x, rotation: {rotation_angle:.1f}°)")
                                 print(f"  - {original_filename} (original frame)")
-
+                                
                                 # Store the filename for access in web interface
                                 latest_photo = transformed_filename
-
+                                
                                 # Notify web clients to play sound and show flash
                                 notify_clients_photo_taken(transformed_filename)
-
+                                
                                 # Start cooldown period to prevent multiple triggers
                                 photo_gesture_cooldown = photo_cooldown_frames
                                 last_photo_time = current_time
@@ -1475,24 +1325,6 @@ def main():
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7,
                         (255, 255, 0) if two_hand_gesture_active else (200, 200, 200), 2)
 
-            # Display finger snap status
-            try:
-                if snap_cooldown > 0:
-                    snap_status = "Photo taken!"
-                    snap_color = (0, 255, 255)
-                    snap_cooldown -= 1
-                else:
-                    snap_status = "Snap fingers to take photo"
-                    snap_color = (200, 200, 200)
-
-                cv2.putText(output_frame, f"Snap: {snap_status}", (10, 210),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, snap_color, 2)
-            except Exception as e:
-                print(f"Error displaying snap status: {e}")
-                # Provide a fallback message
-                cv2.putText(output_frame, "Snap fingers to take photo", (10, 210),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
-
             # Display hand count
             hand_count = 0 if results.multi_hand_landmarks is None else len(results.multi_hand_landmarks)
             cv2.putText(output_frame, f"Hands: {hand_count}/2", (10, 90),
@@ -1512,7 +1344,7 @@ def main():
             # Add instruction reminders
             cv2.putText(output_frame, "Pinch both hands: move apart = zoom, rotate = rotate",
                         (10, frame_h - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
-            cv2.putText(output_frame, "Snap fingers to take photo, press 'r' to reset view",
+            cv2.putText(output_frame, "Press 'r' to reset view",
                         (10, frame_h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
 
             # Update the global frame for streaming
@@ -1600,7 +1432,7 @@ latest_photo = None
 def notify_clients_photo_taken(photo_filename=None):
     """Send a message to all connected clients that a photo was taken"""
     event_data = json.dumps({
-        "action": "take_photo",
+        "action": "take_photo", 
         "timestamp": time.time(),
         "filename": photo_filename
     })
