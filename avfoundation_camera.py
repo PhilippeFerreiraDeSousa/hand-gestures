@@ -52,7 +52,7 @@ def index():
             h1 { color: #333; }
             .stream-container { margin: 20px auto; max-width: 95%; border: 3px solid #333; border-radius: 5px; }
             img { width: 100%; height: auto; }
-            .info { margin: 20px; padding: 10px; background: #fff; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+            .info { margin: 20px; padding: 10px; background: #fff; border-radius: 5px; }
             .fallback { margin: 20px; font-style: italic; }
             .buttons { margin: 15px; }
             button { padding: 8px 16px; margin: 0 10px; background-color: #4CAF50; color: white;
@@ -61,19 +61,46 @@ def index():
             .flash { position: fixed; top: 0; left: 0; width: 100%; height: 100%;
                     background-color: white; opacity: 0; z-index: 1000; pointer-events: none;
                     transition: opacity 0.1s ease-out; }
+            .audio-notice {
+                margin: 10px auto;
+                padding: 10px;
+                background-color: #ffffd0;
+                border: 1px solid #e6e600;
+                border-radius: 5px;
+                max-width: 600px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .audio-notice.enabled {
+                background-color: #d0ffd0;
+                border: 1px solid #00e600;
+            }
+            .audio-icon {
+                margin-right: 10px;
+                font-size: 24px;
+            }
         </style>
     </head>
     <body>
         <h1>Hand Gesture Control - Live Stream</h1>
+
+        <!-- Audio permission notice -->
+        <div class="audio-notice" id="audioNotice">
+            <span class="audio-icon">🔊</span>
+            <span>Click anywhere on this page to enable camera shutter sound</span>
+        </div>
+
         <div class="stream-container">
             <img src="/video_feed" id="stream" alt="Live Stream" />
         </div>
         <div class="buttons">
             <button onclick="refreshStream()">Refresh Stream</button>
             <button onclick="toggleFallback()">Try Simple Mode</button>
+            <button onclick="testShutterSound()">Test Shutter Sound</button>
         </div>
         <div class="fallback" id="fallbackInfo" style="display:none;">
-            <p>If the stream isn't working, you can try the <a href="/simple_feed">Simple Mode</a> or
+            <p>If the stream isn't working, you can try the <a href="/simple_view">Simple Mode</a> or
             refresh the page. Some browsers handle MJPEG streams better than others.</p>
         </div>
         <div class="info">
@@ -87,9 +114,63 @@ def index():
         <div id="flash" class="flash"></div>
         <!-- Camera shutter sound -->
         <audio id="shutterSound">
-            <source src="/static/camera-shutter-sound.mp3" type="audio/mpeg">
+            <source src="/static/camera-shutter.mp3" type="audio/mpeg">
         </audio>
         <script>
+            // Audio context for unlocking sound on mobile devices
+            let audioUnlocked = false;
+
+            // Function to unlock audio on first user interaction
+            function unlockAudio() {
+                if (audioUnlocked) return;
+
+                const sound = document.getElementById('shutterSound');
+
+                // Play and immediately pause to unlock audio
+                sound.volume = 0.01; // Very low volume for the initial play
+                sound.play().then(() => {
+                    sound.pause();
+                    sound.currentTime = 0;
+                    sound.volume = 1.0; // Reset volume
+                    audioUnlocked = true;
+
+                    // Update the audio notice
+                    const notice = document.getElementById('audioNotice');
+                    notice.classList.add('enabled');
+                    notice.innerHTML = '<span class="audio-icon">✅</span><span>Camera shutter sound enabled!</span>';
+
+                    // Hide the notice after 3 seconds
+                    setTimeout(() => {
+                        notice.style.opacity = "0.5";
+                    }, 3000);
+
+                    console.log("Audio unlocked successfully");
+
+                    // Remove the event listeners after successful unlock
+                    document.removeEventListener('click', unlockAudio);
+                    document.removeEventListener('touchstart', unlockAudio);
+                    document.removeEventListener('keydown', unlockAudio);
+                }).catch(e => {
+                    console.error("Could not unlock audio:", e);
+                    // Make the notice more prominent if we couldn't unlock
+                    const notice = document.getElementById('audioNotice');
+                    notice.style.backgroundColor = "#ffcccc";
+                    notice.style.border = "1px solid #ff0000";
+                    notice.innerHTML = '<span class="audio-icon">❌</span><span>Please click the "Test Shutter Sound" button to enable audio</span>';
+                });
+            }
+
+            // Add event listeners for user interaction to unlock audio
+            document.addEventListener('click', unlockAudio);
+            document.addEventListener('touchstart', unlockAudio);
+            document.addEventListener('keydown', unlockAudio);
+
+            // Function to test shutter sound
+            function testShutterSound() {
+                playShutterSound();
+                unlockAudio();
+            }
+
             // Wait a moment before showing fallback options
             setTimeout(function() {
                 const img = document.getElementById('stream');
@@ -115,9 +196,16 @@ def index():
                     evtSource = new EventSource("/photo_events");
 
                     evtSource.onmessage = function(event) {
-                        const data = JSON.parse(event.data);
-                        if (data.action === "take_photo") {
-                            playShutterSound();
+                        // Skip empty initial message
+                        if (!event.data || event.data === "{}") return;
+
+                        try {
+                            const data = JSON.parse(event.data);
+                            if (data.action === "take_photo") {
+                                playShutterSound();
+                            }
+                        } catch (e) {
+                            console.error("Error parsing event data:", e);
                         }
                     };
 
@@ -138,8 +226,24 @@ def index():
 
                 // Play sound
                 sound.currentTime = 0;
-                sound.play();
+                sound.play().catch(e => {
+                    console.log("Error playing sound:", e);
+                    // If we can't play the sound, at least show the flash
+                    showFlashEffect();
 
+                    // Update the audio notice with error
+                    const notice = document.getElementById('audioNotice');
+                    notice.style.display = "block";
+                    notice.style.backgroundColor = "#ffcccc";
+                    notice.style.border = "1px solid #ff0000";
+                    notice.innerHTML = '<span class="audio-icon">❌</span><span>Audio permission denied. Click "Test Shutter Sound" button to enable.</span>';
+                });
+
+                showFlashEffect();
+            }
+
+            function showFlashEffect() {
+                const flash = document.getElementById('flash');
                 // Create flash effect
                 flash.style.opacity = 0.7;
                 setTimeout(() => {
@@ -243,8 +347,76 @@ def simple_view():
             .flash { position: fixed; top: 0; left: 0; width: 100%; height: 100%;
                     background-color: white; opacity: 0; z-index: 1000; pointer-events: none;
                     transition: opacity 0.1s ease-out; }
+            .audio-notice {
+                margin: 10px auto;
+                padding: 10px;
+                background-color: #ffffd0;
+                border: 1px solid #e6e600;
+                border-radius: 5px;
+                max-width: 600px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .audio-notice.enabled {
+                background-color: #d0ffd0;
+                border: 1px solid #00e600;
+            }
+            .audio-icon {
+                margin-right: 10px;
+                font-size: 24px;
+            }
         </style>
         <script>
+            // Audio context for unlocking sound on mobile devices
+            let audioUnlocked = false;
+
+            // Function to unlock audio on first user interaction
+            function unlockAudio() {
+                if (audioUnlocked) return;
+
+                const sound = document.getElementById('shutterSound');
+
+                // Play and immediately pause to unlock audio
+                sound.volume = 0.01; // Very low volume for the initial play
+                sound.play().then(() => {
+                    sound.pause();
+                    sound.currentTime = 0;
+                    sound.volume = 1.0; // Reset volume
+                    audioUnlocked = true;
+
+                    // Update the audio notice
+                    const notice = document.getElementById('audioNotice');
+                    notice.classList.add('enabled');
+                    notice.innerHTML = '<span class="audio-icon">✅</span><span>Camera shutter sound enabled!</span>';
+
+                    // Hide the notice after 3 seconds
+                    setTimeout(() => {
+                        notice.style.opacity = "0.5";
+                    }, 3000);
+
+                    console.log("Audio unlocked successfully");
+
+                    // Remove the event listeners after successful unlock
+                    document.removeEventListener('click', unlockAudio);
+                    document.removeEventListener('touchstart', unlockAudio);
+                    document.removeEventListener('keydown', unlockAudio);
+                }).catch(e => {
+                    console.error("Could not unlock audio:", e);
+                    // Make the notice more prominent if we couldn't unlock
+                    const notice = document.getElementById('audioNotice');
+                    notice.style.backgroundColor = "#ffcccc";
+                    notice.style.border = "1px solid #ff0000";
+                    notice.innerHTML = '<span class="audio-icon">❌</span><span>Please click the "Test Shutter Sound" button to enable audio</span>';
+                });
+            }
+
+            // Function to test shutter sound
+            function testShutterSound() {
+                playShutterSound();
+                unlockAudio();
+            }
+
             function refreshImage() {
                 const img = document.getElementById('staticFrame');
                 img.src = "/frame?t=" + new Date().getTime();
@@ -262,9 +434,16 @@ def simple_view():
                     evtSource = new EventSource("/photo_events");
 
                     evtSource.onmessage = function(event) {
-                        const data = JSON.parse(event.data);
-                        if (data.action === "take_photo") {
-                            playShutterSound();
+                        // Skip empty initial message
+                        if (!event.data || event.data === "{}") return;
+
+                        try {
+                            const data = JSON.parse(event.data);
+                            if (data.action === "take_photo") {
+                                playShutterSound();
+                            }
+                        } catch (e) {
+                            console.error("Error parsing event data:", e);
                         }
                     };
 
@@ -285,8 +464,24 @@ def simple_view():
 
                 // Play sound
                 sound.currentTime = 0;
-                sound.play();
+                sound.play().catch(e => {
+                    console.log("Error playing sound:", e);
+                    // If we can't play the sound, at least show the flash
+                    showFlashEffect();
 
+                    // Update the audio notice with error
+                    const notice = document.getElementById('audioNotice');
+                    notice.style.display = "block";
+                    notice.style.backgroundColor = "#ffcccc";
+                    notice.style.border = "1px solid #ff0000";
+                    notice.innerHTML = '<span class="audio-icon">❌</span><span>Audio permission denied. Click "Test Shutter Sound" button to enable.</span>';
+                });
+
+                showFlashEffect();
+            }
+
+            function showFlashEffect() {
+                const flash = document.getElementById('flash');
                 // Create flash effect
                 flash.style.opacity = 0.7;
                 setTimeout(() => {
@@ -296,17 +491,30 @@ def simple_view():
 
             // Initialize event source connection
             setupEventSource();
+
+            // Add event listeners for user interaction to unlock audio
+            document.addEventListener('click', unlockAudio);
+            document.addEventListener('touchstart', unlockAudio);
+            document.addEventListener('keydown', unlockAudio);
         </script>
     </head>
     <body>
         <h1>Hand Gesture Control - Simple Mode</h1>
         <p>This mode uses simple image refreshing for better compatibility</p>
+
+        <!-- Audio permission notice -->
+        <div class="audio-notice" id="audioNotice">
+            <span class="audio-icon">🔊</span>
+            <span>Click anywhere on this page to enable camera shutter sound</span>
+        </div>
+
         <div class="stream-container">
             <img id="staticFrame" src="/frame" alt="Current Frame" />
         </div>
         <p>Last updated: <span id="lastUpdate">now</span></p>
         <button onclick="refreshImage()">Refresh Now</button>
         <button onclick="window.location.href='/'">Back to Standard Mode</button>
+        <button onclick="testShutterSound()">Test Shutter Sound</button>
         <div class="info">
             <h3>Hand Gesture Instructions:</h3>
             <p>1. Show both hands with thumb and index finger pinching</p>
@@ -318,7 +526,7 @@ def simple_view():
         <div id="flash" class="flash"></div>
         <!-- Camera shutter sound -->
         <audio id="shutterSound">
-            <source src="/static/camera-shutter-sound.mp3" type="audio/mpeg">
+            <source src="/static/camera-shutter.mp3" type="audio/mpeg">
         </audio>
     </body>
     </html>
@@ -913,6 +1121,11 @@ def main():
                                 photo_filename = f"photo_{time.strftime('%Y%m%d_%H%M%S')}.jpg"
                                 cv2.imwrite(os.path.join('static', photo_filename), original_frame)
                                 print(f"Photo saved as {photo_filename}")
+
+                                # Check if we need to create a static directory
+                                if not os.path.exists('static'):
+                                    os.makedirs('static')
+                                    print("Created static directory for storing photos and sounds")
 
                                 # Notify web clients to play sound and show flash
                                 notify_clients_photo_taken()

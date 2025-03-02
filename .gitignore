@@ -32,6 +32,7 @@ venv.bak/
 # Camera test and output files
 camera_test_*.jpg
 camera_test_*.png
+static/photo_*.jpg
 *.mp4
 *.avi
 *.mov
