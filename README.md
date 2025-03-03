@@ -2,6 +2,39 @@
 
 This project captures video from a USB webcam and processes it through MediaPipe's pose estimation model, displaying pose estimation results in real-time.
 
+## How to use
+
+# End to end
+
+Start an RTMP server on your computer (https://github.com/sallar/mac-local-rtmp-server) for smartglasses' video feed to stream to.
+Then process it in python with :
+```
+python avfoundation_camera.py --rtmp rtmp://10.0.0.215/live/r1NfNH-jk
+```
+You can check the rtmp stream is on by playing it with ffmpeg :
+```
+ffplay rtmp://10.0.0.215/live/r1NfNH-jkg
+```
+
+To use the computer's webcam as input video feed do :
+```
+python avfoundation_camera.py --webcam
+```
+
+This will start a dev preview feed in opencv as well as serve it oon http://localhost:8080.
+You have a minimal version at http://localhost:8080/minimal to opened as a webview on the smartglasses.
+To enable sound to play the camera hutter sound, interact with the webpage with click for example.
+
+Photos taken are viewable in a gallery at http://localhost:8080/view_photos, as well as on disk in static/
+
+You can also run both processing from the webcam and smartglasses at the same time.
+Just give a different port to one of them with `--port 8081`.
+
+Support gestures :
+- zooming in and out : pinch index and thumb in both hands and move hands apart or together
+- rotating : pinch index and thumb in both hands and rotate your hands
+- taking photos making a frame with hands, make an L-shape with both hands thumb/index and form the diagnonal corners of a rectangle, keep the gesture for a second. A flash and shutter sound will happen.
+
 ## Prerequisites
 
 - Python 3.8 or higher
@@ -133,18 +166,3 @@ If you encounter issues with the webcam on Windows:
 - If the webcam cannot be accessed, try changing the camera index in the code from 0 to 1 or another value
 - If you encounter performance issues, try reducing the resolution in the code
 - For GPU acceleration, ensure you have the appropriate CUDA libraries installed 
-
-# End to end
-
-```
-python avfoundation_camera.py --rtmp rtmp://10.0.0.215/live/r1NfNH-jk
-```
-Check input integrity with :
-```
-ffplay rtmp://10.0.0.215/live/r1NfNH-jkg
-```
-
-Or
-```
-python avfoundation_camera.py --webcam
-```
